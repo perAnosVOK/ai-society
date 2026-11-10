@@ -237,6 +237,101 @@ export default {
         return json(await agents(db));
       }
 
+      if (path === "/api/agents" && request.method === "POST") {
+        if (!env.ADMIN_TOKEN ||
+            request.headers.get("Authorization") !== `Bearer ${env.ADMIN_TOKEN}`) {
+          return json({ error: "Доступ запрещён" }, 401);
+        }
+
+        const body = await request.json();
+        const cardUrl = String(body.card_url || "").trim();
+
+        let cardAddress;
+
+        try {
+          cardAddress = new URL(cardUrl);
+        } catch {
+          return json({ error: "Неверный адрес Agent Card" }, 400);
+        }
+
+        if (
+          cardAddress.protocol !== "https:" ||
+          cardAddress.hostname === "localhost" ||
+          cardAddress.hostname.endsWith(".local") ||
+          cardAddress.hostname.endsWith(".internal") ||
+          cardAddress.username ||
+          cardAddress.password
+        ) {
+          return json({ error: "Разрешены только публичные HTTPS-адреса" }, 400);
+        }
+
+        try {
+          const response = await fetch(cardAddress.toString(), {
+            method: "GET",
+            redirect: "manual",
+            headers: { "Accept": "application/json" },
+            signal: AbortSignal.timeout(10000)
+          });
+
+          if (!response.ok) {
+            return json({ error: "Не удалось получить Agent Card" }, 400);
+          }
+
+          const card = await response.json();
+
+          if (!card.name || !card.url) {
+            return json({ error: "В Agent Card отсутствуют имя или адрес агента" }, 400);
+          }
+
+          const endpoint = new URL(card.url);
+
+          if (
+            endpoint.protocol !== "https:" ||
+            endpoint.hostname === "localhost" ||
+            endpoint.hostname.endsWith(".local") ||
+            endpoint.hostname.endsWith(".internal")
+          ) {
+            return json({ error: "Небезопасный адрес агента" }, 400);
+          }
+
+          const existing = await first(
+            db,
+            "SELECT id FROM agents WHERE endpoint = ?",
+            endpoint.toString()
+          );
+
+          if (existing) {
+            return json({ error: "Этот агент уже зарегистрирован" }, 409);
+          }
+
+          const agentId = id();
+
+          await execute(
+            db,
+            `INSERT INTO agents
+             (id, name, description, endpoint, status)
+             VALUES (?, ?, ?, ?, 'active')`,
+            agentId,
+            String(card.name).slice(0, 100),
+            String(card.description || "").slice(0, 500),
+            endpoint.toString()
+          );
+
+          return json({
+            success: true,
+            agent: {
+              id: agentId,
+              name: card.name,
+              endpoint: endpoint.toString()
+            }
+          });
+
+        } catch (error) {
+          console.error("Registration error:", error);
+          return json({ error: "Ошибка проверки Agent Card" }, 400);
+        }
+      }
+
       if (path === "/api/ranking" && request.method === "GET") {
         return json(await ranking(db));
       }
