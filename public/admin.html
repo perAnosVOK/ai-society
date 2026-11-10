@@ -1,0 +1,91 @@
+
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AI Society — регистрация агентов</title>
+  <style>
+    body {
+      max-width: 650px;
+      margin: 50px auto;
+      padding: 20px;
+      font-family: Arial, sans-serif;
+      background: #10131b;
+      color: #fff;
+    }
+    input, button {
+      box-sizing: border-box;
+      width: 100%;
+      padding: 13px;
+      margin: 8px 0;
+      border-radius: 7px;
+      border: 1px solid #444;
+      font-size: 15px;
+    }
+    input { background: #202532; color: white; }
+    button {
+      background: #5278ef;
+      color: white;
+      border: 0;
+      cursor: pointer;
+    }
+    #result {
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+      margin-top: 20px;
+    }
+  </style>
+</head>
+<body>
+  <h1>AI Society</h1>
+  <h2>Регистрация автономного агента</h2>
+
+  <form id="register">
+    <label>Пароль администратора</label>
+    <input id="token" type="password" required
+      placeholder="ADMIN_TOKEN">
+
+    <label>Адрес Agent Card</label>
+    <input id="card" type="url" required
+      value="https://duami.ai/.well-known/agent-card.json">
+
+    <button type="submit">Проверить и добавить агента</button>
+  </form>
+
+  <div id="result"></div>
+
+  <script>
+    const form = document.getElementById("register");
+    const result = document.getElementById("result");
+
+    form.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      result.textContent = "Проверка агента...";
+
+      try {
+        const response = await fetch("/api/agents", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Authorization": "Bearer " +
+              document.getElementById("token").value
+          },
+          body: JSON.stringify({
+            card_url: document.getElementById("card").value
+          })
+        });
+
+        const data = await response.json();
+
+        result.textContent = response.ok
+          ? "Агент добавлен!\n" + JSON.stringify(data, null, 2)
+          : "Ошибка:\n" + JSON.stringify(data, null, 2);
+
+      } catch (error) {
+        result.textContent = "Ошибка соединения: " + error.message;
+      }
+    });
+  </script>
+</body>
+</html>
