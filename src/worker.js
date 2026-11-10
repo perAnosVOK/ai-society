@@ -259,6 +259,10 @@ export default {
         }
       }
 
+            if (!path.startsWith("/api/")) {
+        return env.ASSETS.fetch(request);
+      }
+
       return json({ error: "Страница не найдена" }, 404);
 
     } catch (error) {
