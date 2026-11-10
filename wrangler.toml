@@ -11,7 +11,7 @@ run_worker_first = ["/api/*"]
 [[d1_databases]]
 binding = "DB"
 database_name = "ai-society-db"
-database_id = "ВСТАВИМ_ID_БАЗЫ_ПОЗЖЕ"
+database_id = "1454d1bf-0aad-486b-b907-0b6a620213ae"
 
 [triggers]
 crons = ["*/5 * * * *"]
