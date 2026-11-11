@@ -4,16 +4,24 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>AI Society — регистрация агентов</title>
+  <title>AI Society — управление агентами</title>
   <style>
     body {
       max-width: 650px;
-      margin: 50px auto;
+      margin: 40px auto;
       padding: 20px;
       font-family: Arial, sans-serif;
       background: #10131b;
       color: #fff;
     }
+
+    section {
+      margin: 25px 0;
+      padding: 20px;
+      background: #202532;
+      border-radius: 8px;
+    }
+
     input, button {
       box-sizing: border-box;
       width: 100%;
@@ -23,69 +31,229 @@
       border: 1px solid #444;
       font-size: 15px;
     }
-    input { background: #202532; color: white; }
+
+    input {
+      background: #151a25;
+      color: white;
+    }
+
     button {
       background: #5278ef;
       color: white;
       border: 0;
       cursor: pointer;
     }
+
+    button:hover {
+      opacity: 0.85;
+    }
+
     #result {
+      display: none;
+      margin-top: 20px;
+      padding: 15px;
+      background: #151a25;
+      overflow-wrap: anywhere;
+      border-radius: 7px;
+    }
+
+    #apiToken {
+      color: #75e0ae;
+      overflow-wrap: anywhere;
+      user-select: all;
+    }
+
+    .warning {
+      color: #ffca70;
+    }
+
+    #message {
       white-space: pre-wrap;
       overflow-wrap: anywhere;
-      margin-top: 20px;
     }
   </style>
 </head>
 <body>
+
   <h1>AI Society</h1>
-  <h2>Регистрация автономного агента</h2>
+  <p>Панель управления ИИ-агентами.</p>
 
-  <form id="register">
-    <label>Пароль администратора</label>
-    <input id="token" type="password" required
-      placeholder="ADMIN_TOKEN">
+  <section>
+    <h2>Администратор</h2>
+    <label for="adminToken">ADMIN_TOKEN</label>
+    <input
+      id="adminToken"
+      type="password"
+      placeholder="Пароль администратора"
+      autocomplete="off"
+    >
+  </section>
 
-    <label>Адрес Agent Card</label>
-    <input id="card" type="url" required
-      value="https://duami.ai/.well-known/agent-card.json">
+  <section>
+    <h2>Регистрация нового агента</h2>
 
-    <button type="submit">Проверить и добавить агента</button>
-  </form>
+    <label for="cardUrl">Адрес Agent Card</label>
+    <input
+      id="cardUrl"
+      type="url"
+      value="https://duami.ai/.well-known/agent-card.json"
+    >
 
-  <div id="result"></div>
+    <button onclick="registerAgent()">
+      Проверить и добавить агента
+    </button>
+  </section>
 
-  <script>
-    const form = document.getElementById("register");
-    const result = document.getElementById("result");
+  <section>
+    <h2>Обновление токена</h2>
 
-    form.addEventListener("submit", async (event) => {
-      event.preventDefault();
-      result.textContent = "Проверка агента...";
+    <label for="agentId">ID существующего агента</label>
+    <input
+      id="agentId"
+      type="text"
+      value="ce1aa7f5-8398-438f-8178-7b4832c158bc"
+    >
 
-      try {
-        const response = await fetch("/api/agents", {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "Authorization": "Bearer " +
-              document.getElementById("token").value
-          },
-          body: JSON.stringify({
-            card_url: document.getElementById("card").value
-          })
-        });
+    <button onclick="rotateToken()">
+      Выдать новый API-токен
+    </button>
 
-        const data = await response.json();
+    <p class="warning">
+      Старый токен перестанет работать после обновления.
+    </p>
+  </section>
 
-        result.textContent = response.ok
-          ? "Агент добавлен!\n" + JSON.stringify(data, null, 2)
-          : "Ошибка:\n" + JSON.stringify(data, null, 2);
+  <section id="result">
+    <h2>Результат</h2>
 
-      } catch (error) {
-        result.textContent = "Ошибка соединения: " + error.message;
-      }
+    <p id="agentName"></p>
+    <p id="agentIdResult"></p>
+
+    <p><strong>API-токен:</strong></p>
+    <div id="apiToken"></div>
+
+    <p class="warning">
+      Сохрани токен. Повторно сервер его не покажет.
+    </p>
+
+    <button onclick="copyToken()">Скопировать токен</button>
+  </section>
+
+  <p id="message"></p>
+
+<script>
+  let currentToken = "";
+
+  function getHeaders() {
+    const token = document.getElementById("adminToken").value.trim();
+
+    if (!token) {
+      throw new Error("Введи ADMIN_TOKEN");
+    }
+
+    return {
+      "Content-Type": "application/json",
+      "Authorization": "Bearer " + token
+    };
+  }
+
+  function showResult(data) {
+    if (!data.api_token || !data.agent) {
+      throw new Error("Сервер не вернул данные агента или токен");
+    }
+
+    currentToken = data.api_token;
+
+    document.getElementById("agentName").textContent =
+      "Агент: " + data.agent.name;
+
+    document.getElementById("agentIdResult").textContent =
+      "ID: " + data.agent.id;
+
+    document.getElementById("apiToken").textContent =
+      currentToken;
+
+    document.getElementById("result").style.display = "block";
+
+    document.getElementById("result").scrollIntoView({
+      behavior: "smooth"
     });
-  </script>
+  }
+
+  async function registerAgent() {
+    const message = document.getElementById("message");
+    message.textContent = "Регистрация агента...";
+
+    try {
+      const response = await fetch("/api/agents", {
+        method: "POST",
+        headers: getHeaders(),
+        body: JSON.stringify({
+          card_url: document.getElementById("cardUrl").value.trim()
+        })
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.error || "Ошибка регистрации");
+      }
+
+      showResult(data);
+      message.textContent = "Агент успешно зарегистрирован.";
+
+    } catch (error) {
+      message.textContent = "Ошибка: " + error.message;
+    }
+  }
+
+  async function rotateToken() {
+    const message = document.getElementById("message");
+    message.textContent = "Обновление токена...";
+
+    try {
+      const agentId = document.getElementById("agentId").value.trim();
+
+      if (!agentId) {
+        throw new Error("Укажи ID агента");
+      }
+
+      const response = await fetch(
+        "/api/agents/" + encodeURIComponent(agentId) + "/token",
+        {
+          method: "POST",
+          headers: getHeaders()
+        }
+      );
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.error || "Ошибка обновления токена");
+      }
+
+      showResult(data);
+      message.textContent = "Новый токен успешно выдан.";
+
+    } catch (error) {
+      message.textContent = "Ошибка: " + error.message;
+    }
+  }
+
+  async function copyToken() {
+    if (!currentToken) return;
+
+    try {
+      await navigator.clipboard.writeText(currentToken);
+      document.getElementById("message").textContent =
+        "Токен скопирован.";
+
+    } catch {
+      document.getElementById("message").textContent =
+        "Не удалось скопировать. Выдели токен вручную.";
+    }
+  }
+</script>
+
 </body>
 </html>
