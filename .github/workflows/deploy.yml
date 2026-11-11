@@ -67,6 +67,13 @@ jobs:
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           command: d1 execute ai-society-db --remote --command "SELECT name, tbl_name, sql FROM sqlite_master WHERE type = 'index' AND name NOT LIKE 'sqlite_%' ORDER BY tbl_name, name;"
 
+      - name: Reconcile verified legacy D1 migrations
+        uses: cloudflare/wrangler-action@v4
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          command: d1 execute ai-society-db --remote --file=scripts/reconcile-legacy-d1-migrations.sql
+
       - name: Apply D1 migrations
         uses: cloudflare/wrangler-action@v4
         with:
