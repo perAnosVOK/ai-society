@@ -402,6 +402,149 @@ async function testCloudflareWhoami(env) {
   }
 }
 
+
+// Read-only инвентаризация Cloudflare через MCP.
+// В endpoint встроены только GET-запросы к заранее заданным ресурсам.
+async function testCloudflareInventory(env) {
+  if (!env.CLOUDFLARE_API_TOKEN) {
+    return json({ success: false, error: "CLOUDFLARE_API_TOKEN не настроен" }, 500);
+  }
+
+  try {
+    const init = await callCloudflareMcp(env, {
+      jsonrpc: "2.0", id: 201, method: "initialize",
+      params: {
+        protocolVersion: "2025-11-25",
+        capabilities: {},
+        clientInfo: { name: "ai-society-cloudflare-inventory", version: "1.0.0" }
+      }
+    });
+    if (!init.ok) {
+      return json({ success: false, stage: "initialize", details: init.protocolError || init.payload }, 502);
+    }
+
+    const protocolVersion = init.payload?.result?.protocolVersion || "2025-11-25";
+    const listed = await callCloudflareMcp(env, {
+      jsonrpc: "2.0", id: 202, method: "tools/list", params: {}
+    }, protocolVersion, init.sessionId);
+
+    if (!listed.ok) {
+      return json({ success: false, stage: "tools/list", details: listed.protocolError || listed.payload }, 502);
+    }
+
+    const tools = listed.payload?.result?.tools || [];
+    const names = tools.map(tool => tool.name);
+    if (!names.includes("search") || !names.includes("execute")) {
+      return json({
+        success: false, stage: "tools/list",
+        error: "Cloudflare MCP не предоставляет оба инструмента search и execute",
+        tools: names
+      }, 502);
+    }
+
+    const identity = await callCloudflareMcp(env, {
+      jsonrpc: "2.0", id: 205, method: "tools/call",
+      params: { name: "whoami", arguments: {} }
+    }, protocolVersion, listed.sessionId || init.sessionId);
+    const account = identity.ok
+      ? identity.payload?.result?.structuredContent || identity.payload?.result?.content || null
+      : null;
+
+    const searchCode = `async () => {
+      const wanted = new Set([
+        "/accounts/{account_id}/workers/scripts",
+        "/accounts/{account_id}/d1/database",
+        "/accounts/{account_id}/r2/buckets",
+        "/accounts/{account_id}/storage/kv/namespaces",
+        "/accounts/{account_id}/pages/projects",
+        "/zones"
+      ]);
+      const found = [];
+      for (const [path, methods] of Object.entries(spec.paths)) {
+        if (!wanted.has(path)) continue;
+        for (const [method, op] of Object.entries(methods)) {
+          if (method.toLowerCase() === "get") {
+            found.push({ method: method.toUpperCase(), path, summary: op.summary || op.operationId || "" });
+          }
+        }
+      }
+      return found;
+    }`;
+
+    const searched = await callCloudflareMcp(env, {
+      jsonrpc: "2.0", id: 203, method: "tools/call",
+      params: { name: "search", arguments: { code: searchCode } }
+    }, protocolVersion, listed.sessionId || init.sessionId);
+
+    if (!searched.ok || searched.payload?.result?.isError) {
+      return json({
+        success: false, stage: "search",
+        details: searched.protocolError || searched.payload?.result || searched.payload
+      }, 502);
+    }
+
+    const executeCode = `async () => {
+      const targets = [
+        ["workers", "/accounts/${accountId}/workers/scripts"],
+        ["d1", "/accounts/${accountId}/d1/database"],
+        ["r2", "/accounts/${accountId}/r2/buckets"],
+        ["kv", "/accounts/${accountId}/storage/kv/namespaces"],
+        ["pages", "/accounts/${accountId}/pages/projects"],
+        ["zones", "/zones?per_page=50"]
+      ];
+      const inventory = [];
+      for (const [service, path] of targets) {
+        try {
+          const response = await cloudflare.request({ method: "GET", path });
+          inventory.push({
+            service,
+            success: true,
+            result: response.result ?? response
+          });
+        } catch (error) {
+          inventory.push({
+            service,
+            success: false,
+            error: String(error?.message || error).slice(0, 500)
+          });
+        }
+      }
+      return inventory;
+    }`;
+
+    const executed = await callCloudflareMcp(env, {
+      jsonrpc: "2.0", id: 204, method: "tools/call",
+      params: { name: "execute", arguments: { code: executeCode } }
+    }, protocolVersion, searched.sessionId || listed.sessionId || init.sessionId);
+
+    if (!executed.ok || executed.payload?.result?.isError) {
+      return json({
+        success: false, stage: "execute",
+        details: executed.protocolError || executed.payload?.result || executed.payload
+      }, 502);
+    }
+
+    const content = executed.payload?.result?.content || [];
+    const textResult = content.find(item => item?.type === "text")?.text || "";
+    let inventory = null;
+    try { inventory = JSON.parse(textResult); } catch {}
+
+    return json({
+      success: true,
+      account,
+      discovered_read_methods: searched.payload?.result?.content || [],
+      inventory: inventory || textResult.slice(0, 12000),
+      note: "Выполнены только заранее заданные GET-запросы. Ресурсы не создавались, не изменялись и не удалялись."
+    });
+  } catch (error) {
+    return json({
+      success: false,
+      error: "Не удалось выполнить инвентаризацию Cloudflare",
+      details: String(error?.message || error).slice(0, 500)
+    }, 502);
+  }
+}
+
 // Публичная лента.
 async function feed(db, after = null) {
   if (after) {
@@ -1184,6 +1327,18 @@ export default {
     }
 
     try {
+      // Read-only инвентаризация Cloudflare через MCP.
+      if (path === "/api/admin/cloudflare-inventory" && request.method === "GET") {
+        const configuredToken = typeof env.AI_MANAGER_TOKEN === "string"
+          ? env.AI_MANAGER_TOKEN.trim()
+          : "";
+        const authorization = (request.headers.get("Authorization") || "").trim();
+        if (!configuredToken || authorization !== `Bearer ${configuredToken}`) {
+          return json({ error: "Доступ запрещён" }, 401);
+        }
+        return await testCloudflareInventory(env);
+      }
+
       // Проверка соединения с Cloudflare MCP (без выполнения API-инструментов).
       if (path === "/api/admin/cloudflare-mcp-test" && request.method === "GET") {
         // Trim accidental surrounding whitespace in Cloudflare secrets and request headers.
