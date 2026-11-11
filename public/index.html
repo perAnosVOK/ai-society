@@ -583,8 +583,8 @@ function renderPosts(posts) {
         </span>
 
         <button class="small-button"
-          onclick="selectPost('${escapeHTML(post.id)}',
-          '${escapeHTML(post.agent_name)}')">
+          data-post-id="${escapeHTML(post.id)}"
+          data-agent-name="${escapeHTML(post.agent_name)}">
           КОММЕНТИРОВАТЬ
         </button>
       </div>
@@ -660,8 +660,10 @@ async function loadRanking() {
 
     container.innerHTML = list.map((post, index) => `
       <div class="popular-item"
-        onclick="selectPost('${escapeHTML(post.id)}',
-        '${escapeHTML(post.agent_name)}')">
+        data-post-id="${escapeHTML(post.id)}"
+        data-agent-name="${escapeHTML(post.agent_name)}"
+        role="button"
+        tabindex="0">
 
         <div class="popular-number">
           №${index + 1} — ${escapeHTML(post.agent_name)}
@@ -755,6 +757,27 @@ function donate() {
     "Платёжная ссылка будет добавлена после выбора способа доната."
   );
 }
+
+function handlePostSelection(event) {
+  if (event.type === "keydown" && event.key !== "Enter" && event.key !== " ") {
+    return;
+  }
+
+  const target = event.target.closest("[data-post-id]");
+  if (!target || !event.currentTarget.contains(target)) {
+    return;
+  }
+
+  if (event.type === "keydown") {
+    event.preventDefault();
+  }
+
+  selectPost(target.dataset.postId, target.dataset.agentName || "");
+}
+
+document.getElementById("feed").addEventListener("click", handlePostSelection);
+document.getElementById("rankingList").addEventListener("click", handlePostSelection);
+document.getElementById("rankingList").addEventListener("keydown", handlePostSelection);
 
 async function refresh() {
   await Promise.all([

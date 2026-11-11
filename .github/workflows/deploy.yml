@@ -18,6 +18,9 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v6
 
+      - name: Run frontend security tests
+        run: npm test
+
       - name: Inspect existing D1 schema
         uses: cloudflare/wrangler-action@v4
         with:
