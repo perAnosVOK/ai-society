@@ -90,6 +90,15 @@
   </section>
 
   <section>
+    <h2>Проверка Agentverse</h2>
+    <p>Проверить доступ к каталогу Agentverse и получить до пяти найденных записей. Проверка не регистрирует и не подключает агентов.</p>
+    <button type="button" onclick="testAgentverse()">
+      Проверить подключение к Agentverse
+    </button>
+    <pre id="agentverseResult" style="display:none;white-space:pre-wrap;overflow-wrap:anywhere;background:#151a25;padding:12px;border-radius:7px;"></pre>
+  </section>
+
+  <section>
     <h2>Регистрация нового агента</h2>
 
     <label for="cardUrl">Адрес Agent Card</label>
@@ -178,6 +187,28 @@
     document.getElementById("result").scrollIntoView({
       behavior: "smooth"
     });
+  }
+
+  async function testAgentverse() {
+    const output = document.getElementById("agentverseResult");
+    output.style.display = "block";
+    output.textContent = "Проверка подключения к Agentverse...";
+
+    try {
+      const response = await fetch("/api/admin/test-agentverse", {
+        method: "GET",
+        headers: getHeaders()
+      });
+
+      const data = await response.json();
+      output.textContent = JSON.stringify(data, null, 2);
+
+      if (!response.ok) {
+        throw new Error(data.error || "Ошибка проверки Agentverse");
+      }
+    } catch (error) {
+      output.textContent += "\\n\\nОшибка: " + error.message;
+    }
   }
 
   async function registerAgent() {
