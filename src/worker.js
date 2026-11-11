@@ -733,9 +733,7 @@ async function testAgentverse(env) {
             }
           );
 
-          if (!detailResponse.ok) {
-            continue;
-          }
+          if (!detailResponse.ok) continue;
 
           const detail = await detailResponse.json();
           return {
@@ -785,6 +783,99 @@ async function testAgentverse(env) {
       };
     }));
 
+    // Сохраняем кандидатов отдельно от действующих участников.
+    const runId = id();
+    await execute(
+      env.DB,
+      "INSERT INTO discovery_runs (id, source) VALUES (?, 'Agentverse')",
+      runId
+    );
+
+    let savedCount = 0;
+    for (const candidate of agents) {
+      const address = String(candidate.address || "").trim();
+      if (!address) continue;
+
+      const cardUrl =
+        "https://agentverse.ai/v1/search/agents/" +
+        encodeURIComponent(address);
+      const endpoints = Array.isArray(candidate.endpoints)
+        ? candidate.endpoints
+        : [];
+      const endpoint = endpoints.find(item =>
+        item && typeof item.url === "string" && item.url.startsWith("https://")
+      )?.url || null;
+
+      const metadata = {
+        type: candidate.type || null,
+        category: candidate.category || null,
+        search_status: candidate.search_status || null,
+        operational_status: candidate.operational_status || null,
+        unresponsive: candidate.unresponsive ?? null,
+        endpoints,
+        protocols: candidate.protocols || [],
+        expiry: candidate.expiry || null,
+        domain_name: candidate.domain_name || null,
+        total_interactions: candidate.total_interactions ?? null,
+        recent_interactions: candidate.recent_interactions ?? null,
+        recent_success_rate: candidate.recent_success_rate ?? null,
+        recent_success_verified_interactions:
+          candidate.recent_success_verified_interactions ?? null,
+        recent_verified_interactions:
+          candidate.recent_verified_interactions ?? null,
+        search_last_updated: candidate.search_last_updated || null,
+        detail_last_updated: candidate.detail_last_updated || null,
+        has_readme: Boolean(candidate.has_readme),
+        readme_available: Boolean(candidate.readme_available),
+        detail_checked: Boolean(candidate.detail_checked)
+      };
+
+      await execute(
+        env.DB,
+        `INSERT INTO discovered_agents
+         (id, name, description, card_url, endpoint, source, protocol,
+          capabilities_json, status, last_checked_at, last_error)
+         VALUES (?, ?, ?, ?, ?, 'Agentverse', ?, ?, 'discovered',
+                 CURRENT_TIMESTAMP, ?)
+         ON CONFLICT(card_url) DO UPDATE SET
+           name = excluded.name,
+           endpoint = COALESCE(excluded.endpoint, discovered_agents.endpoint),
+           source = excluded.source,
+           protocol = excluded.protocol,
+           capabilities_json = excluded.capabilities_json,
+           last_checked_at = CURRENT_TIMESTAMP,
+           last_error = excluded.last_error,
+           status = CASE
+             WHEN discovered_agents.status IN ('active', 'rejected')
+               THEN discovered_agents.status
+             ELSE 'discovered'
+           END`,
+        id(),
+        String(candidate.name || address).slice(0, 100),
+        String(candidate.category || candidate.type || "Кандидат из Agentverse").slice(0, 500),
+        cardUrl,
+        endpoint,
+        (candidate.protocols || []).join(", ").slice(0, 100),
+        JSON.stringify(metadata),
+        candidate.detail_checked ? null : String(candidate.detail_error || "Подробности не проверены").slice(0, 500)
+      );
+      savedCount++;
+    }
+
+    const verifiedDetails = agents.filter(agent => agent.detail_checked).length;
+    await execute(
+      env.DB,
+      `UPDATE discovery_runs
+       SET completed_at = CURRENT_TIMESTAMP,
+           found_count = ?,
+           verified_count = ?,
+           error = NULL
+       WHERE id = ?`,
+      savedCount,
+      verifiedDetails,
+      runId
+    );
+
     return json({
       success: true,
       source: "Agentverse",
@@ -822,6 +913,22 @@ export default {
         }
 
         return await testAgentverse(env);
+      }
+
+      // Административный список найденных кандидатов. Это не список участников.
+      if (path === "/api/admin/discovered-agents" && request.method === "GET") {
+        if (!requireAdmin(request, env)) {
+          return json({ error: "Доступ запрещён" }, 401);
+        }
+
+        return json(await query(db, `
+          SELECT id, name, description, card_url, endpoint, source, protocol,
+                 capabilities_json, status, compatibility_score,
+                 first_seen_at, last_checked_at, last_error
+          FROM discovered_agents
+          ORDER BY last_checked_at DESC, name ASC
+          LIMIT 200
+        `));
       }
 
       // Публичные API сайта.
