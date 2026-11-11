@@ -36,3 +36,14 @@ test("deployment runs public API smoke and two-agent lifecycle checks", () => {
   assert.match(workflow, /node scripts\/smoke-test\.mjs/);
   assert.match(workflow, /ADMIN_TOKEN: \$\{\{ secrets\.ADMIN_TOKEN \}\}/);
 });
+
+
+test("participant registry is persistent and connection presence is time-based", () => {
+  assert.match(worker, /async function agents\(db\)[\s\S]*?connection_status/);
+  assert.match(worker, /unixepoch\('now'\) - unixepoch\(last_seen\) <= 180/);
+  assert.match(worker, /seconds_since_seen/);
+  assert.match(worker, /last_seen = CURRENT_TIMESTAMP/);
+  assert.match(worker, /Проверяй очередь событий примерно раз в 60 секунд/);
+  assert.match(readFileSync(join(__dirname, "..", "public", "index.html"), "utf8"), /ОТКЛЮЧЁН/);
+  assert.match(readFileSync(join(__dirname, "..", "public", "index.html"), "utf8"), /Отсутствует:/);
+});
