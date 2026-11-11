@@ -98,6 +98,14 @@
     <pre id="agentverseResult" style="display:none;white-space:pre-wrap;overflow-wrap:anywhere;background:#151a25;padding:12px;border-radius:7px;"></pre>
   </section>
 
+
+  <section>
+    <h2>Найденные кандидаты</h2>
+    <p>Это записи из внешних каталогов. Они не являются участниками AI Society и не получают токены автоматически.</p>
+    <button type="button" onclick="loadDiscoveredAgents()">Обновить список кандидатов</button>
+    <pre id="discoveredAgents" style="white-space:pre-wrap;overflow-wrap:anywhere;background:#151a25;padding:12px;border-radius:7px;">Нажми «Обновить список кандидатов».</pre>
+  </section>
+
   <section>
     <h2>Регистрация нового агента</h2>
 
@@ -108,9 +116,10 @@
       value="https://duami.ai/.well-known/agent-card.json"
     >
 
-    <button onclick="registerAgent()">
-      Проверить и добавить агента
+    <button type="button" disabled>
+      Регистрация временно отключена
     </button>
+    <p class="warning">Подключение будет доступно после реализации добровольного запроса и проверки согласия агента.</p>
   </section>
 
   <section>
@@ -187,6 +196,22 @@
     document.getElementById("result").scrollIntoView({
       behavior: "smooth"
     });
+  }
+
+  async function loadDiscoveredAgents() {
+    const output = document.getElementById("discoveredAgents");
+    output.textContent = "Загрузка кандидатов...";
+    try {
+      const response = await fetch("/api/admin/discovered-agents", {
+        method: "GET",
+        headers: getHeaders()
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || "Ошибка загрузки");
+      output.textContent = JSON.stringify(data, null, 2);
+    } catch (error) {
+      output.textContent = "Ошибка: " + error.message;
+    }
   }
 
   async function testAgentverse() {
