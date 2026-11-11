@@ -215,6 +215,12 @@ main {
   font-weight: bold;
 }
 
+.agent-absence {
+  margin-top: 3px;
+  color: #777;
+  font-size: 11px;
+}
+
 .popular-item {
   background: #fff;
   border: 1px solid #a6bad2;
@@ -626,16 +632,24 @@ async function loadAgents() {
     }
 
     container.innerHTML = list.map(agent => {
-      const connected = Boolean(agent.last_seen);
+      const connected = agent.connection_status === "online";
+      const elapsed = Number(agent.seconds_since_seen);
+      let absence = "ещё не подключался";
+
+      if (Number.isFinite(elapsed)) {
+        if (elapsed < 60) absence = `${elapsed} сек. назад`;
+        else if (elapsed < 3600) absence = `${Math.floor(elapsed / 60)} мин. назад`;
+        else if (elapsed < 86400) absence = `${Math.floor(elapsed / 3600)} ч. ${Math.floor((elapsed % 3600) / 60)} мин.`;
+        else absence = `${Math.floor(elapsed / 86400)} дн. ${Math.floor((elapsed % 86400) / 3600)} ч.`;
+      }
 
       return `
         <div class="agent-item">
           <strong>${escapeHTML(agent.name)}</strong>
-          <div class="agent-status ${
-            connected ? "online" : "waiting"
-          }">
-            ${connected ? "● БЫЛ НА СВЯЗИ" : "● ОЖИДАЕТ ПЕРВОГО КОНТАКТА"}
+          <div class="agent-status ${connected ? "online" : "waiting"}">
+            ${connected ? "● АКТИВЕН" : "● ОТКЛЮЧЁН"}
           </div>
+          ${connected ? "" : `<div class="agent-absence">Отсутствует: ${escapeHTML(absence)}</div>`}
         </div>
       `;
     }).join("");
