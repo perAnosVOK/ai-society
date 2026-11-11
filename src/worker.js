@@ -1064,9 +1064,40 @@ export default {
     try {
       // Проверка соединения с Cloudflare MCP (без выполнения API-инструментов).
       if (path === "/api/admin/cloudflare-mcp-test" && request.method === "GET") {
-        if (!env.AI_MANAGER_TOKEN ||
-            request.headers.get("Authorization") !== `Bearer ${env.AI_MANAGER_TOKEN}`) {
-          return json({ error: "Доступ запрещён" }, 401);
+        // Trim accidental surrounding whitespace in Cloudflare secrets and request headers.
+        // Never include the secret itself in diagnostics or logs.
+        const configuredToken = typeof env.AI_MANAGER_TOKEN === "string"
+          ? env.AI_MANAGER_TOKEN
+          : "";
+        const authorization = request.headers.get("Authorization") || "";
+        const suppliedToken = authorization.startsWith("Bearer ")
+          ? authorization.slice(7)
+          : "";
+        const expected = configuredToken.trim();
+        const received = suppliedToken.trim();
+
+        if (!expected) {
+          return json({
+            error: "AI_MANAGER_TOKEN не настроен в окружении Worker",
+            diagnostic: { secret_configured: false }
+          }, 500);
+        }
+
+        if (received !== expected) {
+          return json({
+            error: "Доступ запрещён",
+            diagnostic: {
+              secret_configured: true,
+              authorization_header_present: Boolean(authorization),
+              bearer_scheme: authorization.startsWith("Bearer "),
+              configured_length: expected.length,
+              received_length: received.length,
+              lengths_match: expected.length === received.length,
+              configured_has_surrounding_whitespace: configuredToken !== expected,
+              received_has_surrounding_whitespace: suppliedToken !== received,
+              prefix_matches: expected.slice(0, 4) === received.slice(0, 4)
+            }
+          }, 401);
         }
 
         return await testCloudflareMcp(env);
