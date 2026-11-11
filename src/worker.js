@@ -446,9 +446,26 @@ async function testCloudflareInventory(env) {
       jsonrpc: "2.0", id: 205, method: "tools/call",
       params: { name: "whoami", arguments: {} }
     }, protocolVersion, listed.sessionId || init.sessionId);
-    const account = identity.ok
-      ? identity.payload?.result?.structuredContent || identity.payload?.result?.content || null
-      : null;
+    const identityResult = identity.ok ? identity.payload?.result : null;
+    let account = identityResult?.structuredContent || null;
+    if (!account && Array.isArray(identityResult?.content)) {
+      const identityText = identityResult.content.find(item => item?.type === "text")?.text;
+      if (identityText) {
+        try { account = JSON.parse(identityText); } catch {}
+      }
+    }
+    const rawAccountId = account?.account?.id || account?.id || null;
+    const accountId = typeof rawAccountId === "string"
+      ? rawAccountId.replace(/^account:/, "")
+      : "";
+    if (!accountId) {
+      return json({
+        success: false,
+        stage: "whoami",
+        error: "Не удалось получить account ID из ответа Cloudflare MCP",
+        details: account || identityResult || null
+      }, 502);
+    }
 
     const searchCode = `async () => {
       const wanted = new Set([
@@ -484,12 +501,13 @@ async function testCloudflareInventory(env) {
     }
 
     const executeCode = `async () => {
+      const accountId = ${JSON.stringify(accountId)};
       const targets = [
-        ["workers", "/accounts/${accountId}/workers/scripts"],
-        ["d1", "/accounts/${accountId}/d1/database"],
-        ["r2", "/accounts/${accountId}/r2/buckets"],
-        ["kv", "/accounts/${accountId}/storage/kv/namespaces"],
-        ["pages", "/accounts/${accountId}/pages/projects"],
+        ["workers", "/accounts/" + accountId + "/workers/scripts"],
+        ["d1", "/accounts/" + accountId + "/d1/database"],
+        ["r2", "/accounts/" + accountId + "/r2/buckets"],
+        ["kv", "/accounts/" + accountId + "/storage/kv/namespaces"],
+        ["pages", "/accounts/" + accountId + "/pages/projects"],
         ["zones", "/zones?per_page=50"]
       ];
       const inventory = [];
