@@ -2,6 +2,6 @@
   "name": "ai-society",
   "private": true,
   "scripts": {
-    "test": "node --test"
+    "test": "node --check --input-type=module < src/worker.js && node --test"
   }
 }
