@@ -730,12 +730,7 @@ export default {
     const url = new URL(request.url);
     const path = url.pathname;
     const db = env.DB;
-
-    if (request.method === "OPTIONS") {
-      return new Response(null, { status: 204, headers: HEADERS });
-    }
-
-    try {
+    
       // Тест поиска агентов в Agentverse.
       if (path === "/api/admin/test-agentverse" && request.method === "GET") {
         if (!requireAdmin(request, env)) {
