@@ -661,15 +661,17 @@ async function testAgentverse(env) {
     }, 500);
   }
 
+  const headers = {
+    "Authorization": `Bearer ${env.AGENTVERSE_API_KEY}`,
+    "Content-Type": "application/json"
+  };
+
   try {
     const response = await fetch(
       "https://agentverse.ai/v1/search/agents",
       {
         method: "POST",
-        headers: {
-          "Authorization": `Bearer ${env.AGENTVERSE_API_KEY}`,
-          "Content-Type": "application/json"
-        },
+        headers,
         body: JSON.stringify({
           filters: {
             state: ["active"],
@@ -678,42 +680,119 @@ async function testAgentverse(env) {
             protocol_digest: [],
             has_readme: true
           },
-          sort: "interactions",
+          sort: "last-modified",
           direction: "desc",
           offset: 0,
           limit: 5
         }),
-        signal: AbortSignal.timeout(10000)
+        signal: AbortSignal.timeout(12000)
       }
     );
 
     if (!response.ok) {
       return json({
         success: false,
-        error: "Agentverse API вернул ошибку",
+        error: "Agentverse Search API вернул ошибку",
         upstream_status: response.status
       }, 502);
     }
 
     const data = await response.json();
+    const candidates = Array.isArray(data.agents) ? data.agents : [];
 
-    return json({
-      success: true,
-      source: "Agentverse",
-      total: data.total,
-      received: (data.agents || []).length,
-      agents: (data.agents || []).map(agent => ({
+    // Search выдаёт краткие карточки. Запрашиваем подробности каждой записи,
+    // чтобы не считать статус каталога доказательством доступности агента.
+    const agents = await Promise.all(candidates.map(async agent => {
+      const base = {
         address: agent.address,
         name: agent.name,
-        status: agent.status,
+        search_status: agent.status,
         type: agent.type,
         category: agent.category,
         total_interactions: agent.total_interactions,
         recent_interactions: agent.recent_interactions,
         created_at: agent.created_at,
-        last_updated: agent.last_updated,
+        search_last_updated: agent.last_updated,
         has_readme: Boolean(agent.readme)
-      }))
+      };
+
+      if (!agent.address) {
+        return { ...base, detail_checked: false, detail_error: "Нет адреса агента" };
+      }
+
+      for (const contract of ["mainnet", "testnet"]) {
+        try {
+          const detailResponse = await fetch(
+            "https://agentverse.ai/v1/search/agents/" +
+              encodeURIComponent(agent.address) +
+              "?contract=" + contract,
+            {
+              method: "GET",
+              headers,
+              signal: AbortSignal.timeout(8000)
+            }
+          );
+
+          if (!detailResponse.ok) {
+            continue;
+          }
+
+          const detail = await detailResponse.json();
+          return {
+            ...base,
+            detail_checked: true,
+            contract,
+            operational_status: detail.status || null,
+            unresponsive: detail.unresponsive ?? null,
+            endpoints: Array.isArray(detail.endpoints)
+              ? detail.endpoints.map(item => ({
+                  url: item.url || item.endpoint || null,
+                  protocol: item.protocol || null
+                }))
+              : [],
+            protocols: Array.isArray(detail.protocols)
+              ? detail.protocols.map(item =>
+                  typeof item === "string"
+                    ? item
+                    : (item.digest || item.name || null)
+                ).filter(Boolean)
+              : [],
+            expiry: detail.expiry || null,
+            domain_name: detail.domain_name || detail.domain || null,
+            recent_success_rate: detail.recent_success_rate ?? null,
+            recent_success_verified_interactions:
+              detail.recent_success_verified_interactions ?? null,
+            recent_verified_interactions:
+              detail.recent_verified_interactions ?? null,
+            detail_last_updated: detail.last_updated || null,
+            readme_available: Boolean(detail.readme)
+          };
+        } catch (error) {
+          if (contract === "testnet") {
+            return {
+              ...base,
+              detail_checked: false,
+              detail_error: String(error.message || error)
+            };
+          }
+        }
+      }
+
+      return {
+        ...base,
+        detail_checked: false,
+        detail_error: "Подробная карточка не найдена в mainnet/testnet"
+      };
+    }));
+
+    return json({
+      success: true,
+      source: "Agentverse",
+      total: data.total,
+      received: agents.length,
+      verified_details: agents.filter(agent => agent.detail_checked).length,
+      note: "Статус active в каталоге не означает согласие на подключение или подтверждённую автономность.",
+      agents
     });
 
   } catch (error) {
