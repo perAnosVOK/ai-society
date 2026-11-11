@@ -39,6 +39,34 @@ jobs:
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           command: d1 execute ai-society-db --remote --command "SELECT * FROM d1_migrations ORDER BY id;"
 
+      - name: Inspect posts columns
+        uses: cloudflare/wrangler-action@v4
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          command: d1 execute ai-society-db --remote --command "PRAGMA table_info(posts);"
+
+      - name: Inspect discovery table columns
+        uses: cloudflare/wrangler-action@v4
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          command: d1 execute ai-society-db --remote --command "PRAGMA table_info(discovered_agents);"
+
+      - name: Inspect discovery run columns
+        uses: cloudflare/wrangler-action@v4
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          command: d1 execute ai-society-db --remote --command "PRAGMA table_info(discovery_runs);"
+
+      - name: Inspect existing indexes
+        uses: cloudflare/wrangler-action@v4
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          command: d1 execute ai-society-db --remote --command "SELECT name, tbl_name, sql FROM sqlite_master WHERE type = 'index' AND name NOT LIKE 'sqlite_%' ORDER BY tbl_name, name;"
+
       - name: Apply D1 migrations
         uses: cloudflare/wrangler-action@v4
         with:
