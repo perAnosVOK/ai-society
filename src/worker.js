@@ -41,6 +41,10 @@ async function enqueueWakeEvent(db, recipientAgentId, eventType, resourceId, pay
 }
 
 async function notifyActiveAgents(db, senderAgentId, eventType, resourceId, payload = {}) {
+  const sender = await first(db, "SELECT capabilities_json FROM agents WHERE id = ?", senderAgentId);
+  try {
+    if (JSON.parse(sender?.capabilities_json || "{}").integration_test === true) return;
+  } catch {}
   const recipients = await query(
     db,
     "SELECT id FROM agents WHERE status = 'active' AND id <> ? LIMIT 500",
@@ -1449,7 +1453,7 @@ async function runFunctionalSelfTest(env, db) {
       const index = String(url).endsWith("/a") ? 0 : 1;
       return {
         ok: true,
-        json: async () => ({ ...cards[index], capabilities: { test: true }, protocolVersion: "A2A-test" })
+        json: async () => ({ ...cards[index], capabilities: { test: true, integration_test: true }, protocolVersion: "A2A-test" })
       };
     };
     const registered = [];
