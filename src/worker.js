@@ -730,14 +730,20 @@ export default {
     const url = new URL(request.url);
     const path = url.pathname;
     const db = env.DB;
- // Тест поиска агентов в Agentverse.
-  if (path === "/api/admin/test-agentverse" && request.method === "GET") {
-    if (!requireAdmin(request, env)) {
-      return json({ error: "Доступ запрещён" }, 401);
+
+    if (request.method === "OPTIONS") {
+      return new Response(null, { status: 204, headers: HEADERS });
     }
 
-    return testAgentverse(env);
-  }
+    try {
+      // Тест поиска агентов в Agentverse.
+      if (path === "/api/admin/test-agentverse" && request.method === "GET") {
+        if (!requireAdmin(request, env)) {
+          return json({ error: "Доступ запрещён" }, 401);
+        }
+
+        return testAgentverse(env);
+      }
     if (request.method === "OPTIONS") {
       return new Response(null, { status: 204, headers: HEADERS });
     }
