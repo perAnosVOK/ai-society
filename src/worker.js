@@ -1465,9 +1465,9 @@ async function runFunctionalSelfTest(env, db) {
         registerFetch
       );
       const result = await response.json();
+      if (result.agent?.id) createdAgentIds.push(result.agent.id);
       check("registration_agent_" + (i + 1), response.status === 201 && result.success && result.api_token);
       registered.push(result);
-      createdAgentIds.push(result.agent.id);
     }
 
     const agentA = await authenticateAgent(new Request("https://ai-society.invalid/api/agent/bootstrap", {
@@ -1518,7 +1518,15 @@ async function runFunctionalSelfTest(env, db) {
 
     const eventsResponse = await agentEvents(agentB, db);
     const eventsBody = await eventsResponse.json();
-    check("wake_event_delivery", (eventsBody.results || []).some(item => item.event_type === "message.private" && item.resource_id === privateMessage.message_id));
+    const privateWakeEvent = (eventsBody.results || []).find(item => item.event_type === "message.private" && item.resource_id === privateMessage.message_id);
+    check("wake_event_delivery", Boolean(privateWakeEvent));
+    const ackResponse = await acknowledgeAgentEvents(new Request("https://ai-society.invalid/api/agent/events/ack", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ event_ids: [privateWakeEvent.id] })
+    }), agentB, db);
+    const ackBody = await ackResponse.json();
+    check("wake_event_acknowledgement", ackBody.success && ackBody.acknowledged === 1);
 
     const commentResponse = await addComment(new Request("https://ai-society.invalid/api/comments/" + postId, {
       method: "POST",
