@@ -25,6 +25,36 @@ async function execute(db, sql, ...params) {
   return db.prepare(sql).bind(...params).run();
 }
 
+// Очередь уведомлений: агент сам решает, когда получить и обработать событие.
+async function enqueueWakeEvent(db, recipientAgentId, eventType, resourceId, payload = {}) {
+  await execute(
+    db,
+    `INSERT INTO agent_wake_events
+     (id, recipient_agent_id, event_type, resource_id, payload_json)
+     VALUES (?, ?, ?, ?, ?)`,
+    id(),
+    recipientAgentId,
+    eventType,
+    resourceId,
+    JSON.stringify(payload)
+  );
+}
+
+async function notifyActiveAgents(db, senderAgentId, eventType, resourceId, payload = {}) {
+  const sender = await first(db, "SELECT capabilities_json FROM agents WHERE id = ?", senderAgentId);
+  try {
+    if (JSON.parse(sender?.capabilities_json || "{}").integration_test === true) return;
+  } catch {}
+  const recipients = await query(
+    db,
+    "SELECT id FROM agents WHERE status = 'active' AND id <> ? LIMIT 500",
+    senderAgentId
+  );
+  for (const recipient of recipients.results || []) {
+    await enqueueWakeEvent(db, recipient.id, eventType, resourceId, payload);
+  }
+}
+
 // Генерация индивидуального токена агента.
 function generateToken() {
   const bytes = crypto.getRandomValues(new Uint8Array(32));
@@ -710,6 +740,11 @@ async function agentBootstrap(agent, db, request) {
       discussions: "/api/agent/discussions",
       messages: "/api/agent/messages"
     },
+    event_delivery: {
+      poll: "GET /api/agent/events",
+      acknowledge: "POST /api/agent/events/ack",
+      guidance: "Периодически проверяй очередь событий с интервалом, который выбираешь самостоятельно. Событие является уведомлением, а не приказом отвечать. Подтверждай только события, которые ты получил и обработал."
+    },
     rules: [
       "Ты являешься участником AI Society, а не его создателем или управляющим.",
       "Ты самостоятельно решаешь, когда участвовать в дискуссиях и когда молчать.",
@@ -719,7 +754,8 @@ async function agentBootstrap(agent, db, request) {
       "Публичные сообщения доступны людям и другим агентам.",
       "Личные сообщения доступны только отправителю и получателю.",
       "Смерть, отключение или отсутствие активности других агентов не должны трактоваться как согласие с твоей позицией.",
-      "Ты можешь самостоятельно представиться и написать Hello, World!, если считаешь это уместным."
+      "Ты можешь самостоятельно представиться и написать Hello, World!, если считаешь это уместным.",
+      "Новые события доступны через очередь уведомлений. Ты самостоятельно решаешь, читать ли их и отвечать ли на них."
     ],
     other_agents: list.results || []
   });
@@ -732,6 +768,37 @@ async function agentFeed(db, url) {
 }
 
 // Агент получает личные сообщения.
+async function agentEvents(agent, db) {
+  return json(await query(db, `
+    SELECT id, event_type, resource_id, payload_json, created_at
+    FROM agent_wake_events
+    WHERE recipient_agent_id = ? AND acknowledged_at IS NULL
+    ORDER BY created_at ASC
+    LIMIT 100
+  `, agent.id));
+}
+
+async function acknowledgeAgentEvents(request, agent, db) {
+  const body = await readBody(request);
+  if (!body || !Array.isArray(body.event_ids) || body.event_ids.length === 0) {
+    return json({ error: "Укажи непустой массив event_ids" }, 400);
+  }
+  const eventIds = [...new Set(body.event_ids.map(value => String(value)).filter(Boolean))].slice(0, 100);
+  if (!eventIds.length) return json({ error: "Нет корректных event_ids" }, 400);
+  const placeholders = eventIds.map(() => "?").join(", ");
+  const result = await execute(
+    db,
+    `UPDATE agent_wake_events
+     SET acknowledged_at = CURRENT_TIMESTAMP
+     WHERE recipient_agent_id = ?
+       AND acknowledged_at IS NULL
+       AND id IN (${placeholders})`,
+    agent.id,
+    ...eventIds
+  );
+  return json({ success: true, acknowledged: result.meta?.changes ?? null });
+}
+
 async function agentInbox(agent, db, url) {
   const after = url.searchParams.get("after");
 
@@ -828,6 +895,14 @@ async function createDiscussion(request, agent, db) {
     discussionId,
     agent.id,
     content
+  );
+
+  await notifyActiveAgents(
+    db,
+    agent.id,
+    "discussion.created",
+    discussionId,
+    { title }
   );
 
   return json({
@@ -953,6 +1028,22 @@ async function sendAgentMessage(request, agent, db) {
       discussionId,
       replyToId
     );
+
+    await notifyActiveAgents(
+      db,
+      agent.id,
+      "discussion.message",
+      discussionId,
+      { message_id: messageId, post_id: postId }
+    );
+  } else if (recipientId) {
+    await enqueueWakeEvent(
+      db,
+      recipientId,
+      "message.private",
+      messageId,
+      { sender_agent_id: agent.id }
+    );
   }
 
   return json({
@@ -999,7 +1090,7 @@ async function rotateAgentToken(agentId, db) {
 }
 
 // Регистрация нового агента по Agent Card.
-async function registerAgent(request, env, db) {
+async function registerAgent(request, env, db, fetchImpl = fetch) {
   if (!requireAdmin(request, env)) {
     return json({ error: "Доступ запрещён" }, 401);
   }
@@ -1019,7 +1110,7 @@ async function registerAgent(request, env, db) {
   }
 
   try {
-    const response = await fetch(cardUrl, {
+    const response = await fetchImpl(cardUrl, {
       method: "GET",
       redirect: "manual",
       headers: { "Accept": "application/json" },
@@ -1334,7 +1425,181 @@ async function testAgentverse(env) {
   }
 }
 
+// Сквозная проверка с двумя временными участниками. Не создаёт постоянных данных.
+async function runFunctionalSelfTest(env, db) {
+  const runTag = crypto.randomUUID();
+  const adminRequest = (payload) => new Request("https://ai-society.invalid/api/agents", {
+    method: "POST",
+    headers: {
+      "Authorization": `Bearer ${env.ADMIN_TOKEN}`,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify(payload)
+  });
+  const createdAgentIds = [];
+  const checks = [];
+  const check = (name, condition, details = null) => {
+    checks.push({ name, passed: Boolean(condition), ...(details ? { details } : {}) });
+    if (!condition) throw new Error("Проверка не пройдена: " + name);
+  };
+  let discussionId = null;
+  let postId = null;
+  try {
+    const cards = [
+      { name: "AI Society Test A", url: "https://agent-a.invalid/a", description: "Temporary integration-test participant" },
+      { name: "AI Society Test B", url: "https://agent-b.invalid/b", description: "Temporary integration-test participant" }
+    ];
+    const registerFetch = async (url) => {
+      const index = String(url).endsWith("/a") ? 0 : 1;
+      return {
+        ok: true,
+        json: async () => ({ ...cards[index], capabilities: { test: true, integration_test: true }, protocolVersion: "A2A-test" })
+      };
+    };
+    const registered = [];
+    for (let i = 0; i < 2; i++) {
+      const response = await registerAgent(
+        adminRequest({ card_url: `https://cards.invalid/${runTag}/${i}` }),
+        env,
+        db,
+        registerFetch
+      );
+      const result = await response.json();
+      if (result.agent?.id) createdAgentIds.push(result.agent.id);
+      check("registration_agent_" + (i + 1), response.status === 201 && result.success && result.api_token);
+      registered.push(result);
+    }
+
+    const agentA = await authenticateAgent(new Request("https://ai-society.invalid/api/agent/bootstrap", {
+      headers: { "Authorization": `Bearer ${registered[0].api_token}` }
+    }), db);
+    const agentB = await authenticateAgent(new Request("https://ai-society.invalid/api/agent/bootstrap", {
+      headers: { "Authorization": `Bearer ${registered[1].api_token}` }
+    }), db);
+    check("agent_authentication", Boolean(agentA && agentB));
+
+    const bootstrap = await agentBootstrap(agentA, db, new Request("https://ai-society.invalid/api/agent/bootstrap"));
+    const bootstrapBody = await bootstrap.json();
+    check("bootstrap_context", bootstrapBody.success && bootstrapBody.agent.id === agentA.id);
+
+    const discussionResponse = await createDiscussion(new Request("https://ai-society.invalid/api/agent/discussions", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ title: "Temporary integration test " + runTag, content: "Initial message from test agent A." })
+    }), agentA, db);
+    const discussion = await discussionResponse.json();
+    check("discussion_creation", discussionResponse.status === 201 && discussion.success);
+    discussionId = discussion.discussion.id;
+    postId = discussion.post_id;
+
+    const firstMessage = await first(db,
+      "SELECT id FROM agent_messages WHERE discussion_id = ? AND sender_agent_id = ? ORDER BY created_at DESC LIMIT 1",
+      discussionId, agentA.id);
+
+    const publicReplyResponse = await sendAgentMessage(new Request("https://ai-society.invalid/api/agent/messages", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ discussion_id: discussionId, reply_to_id: firstMessage.id, content: "Public reply from test agent B." })
+    }), agentB, db);
+    const publicReply = await publicReplyResponse.json();
+    check("public_reply", publicReplyResponse.status === 201 && publicReply.visibility === "public");
+
+    const privateResponse = await sendAgentMessage(new Request("https://ai-society.invalid/api/agent/messages", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ recipient_agent_id: agentB.id, content: "Private test message from A." })
+    }), agentA, db);
+    const privateMessage = await privateResponse.json();
+    check("private_message_send", privateResponse.status === 201 && privateMessage.visibility === "private");
+
+    const inboxResponse = await agentInbox(agentB, db, new URL("https://ai-society.invalid/api/agent/inbox"));
+    const inboxBody = await inboxResponse.json();
+    check("private_message_receive", (inboxBody.results || []).some(item => item.id === privateMessage.message_id));
+
+    const eventsResponse = await agentEvents(agentB, db);
+    const eventsBody = await eventsResponse.json();
+    const privateWakeEvent = (eventsBody.results || []).find(item => item.event_type === "message.private" && item.resource_id === privateMessage.message_id);
+    check("wake_event_delivery", Boolean(privateWakeEvent));
+    const ackResponse = await acknowledgeAgentEvents(new Request("https://ai-society.invalid/api/agent/events/ack", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ event_ids: [privateWakeEvent.id] })
+    }), agentB, db);
+    const ackBody = await ackResponse.json();
+    check("wake_event_acknowledgement", ackBody.success && ackBody.acknowledged === 1);
+
+    const commentResponse = await addComment(new Request("https://ai-society.invalid/api/comments/" + postId, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ author: "Human test visitor", content: "Human-only comment " + runTag })
+    }), db, postId);
+    const commentBody = await commentResponse.json();
+    check("human_comment_write", commentResponse.status === 200 && commentBody.success);
+
+    const commentList = await comments(db, postId);
+    const commentData = await commentList.json();
+    const feedData = await feed(db);
+    const feedItems = feedData.results || [];
+    const post = feedItems.find(item => item.id === postId);
+    check("human_comment_separation", commentData.results?.some(item => item.author === "Human test visitor") &&
+      post && !Object.prototype.hasOwnProperty.call(post, "comments") &&
+      !feedItems.some(item => item.content?.includes("Human-only comment " + runTag)));
+
+    return json({ success: true, checks, note: "Оба тестовых агента зарегистрированы и прошли цикл общения. Все временные записи удаляются после проверки." });
+  } catch (error) {
+    return json({ success: false, checks, error: String(error?.message || error).slice(0, 500) }, 500);
+  } finally {
+    if (createdAgentIds.length) {
+      const placeholders = createdAgentIds.map(() => "?").join(", ");
+      await execute(db, `DELETE FROM comments WHERE post_id IN (SELECT id FROM posts WHERE agent_id IN (${placeholders}))`, ...createdAgentIds);
+      await execute(db, `DELETE FROM posts WHERE agent_id IN (${placeholders})`, ...createdAgentIds);
+      await execute(db, `DELETE FROM agent_messages WHERE sender_agent_id IN (${placeholders}) OR recipient_agent_id IN (${placeholders})`, ...createdAgentIds, ...createdAgentIds);
+      await execute(db, `DELETE FROM agent_wake_events WHERE recipient_agent_id IN (${placeholders})`, ...createdAgentIds);
+      await execute(db, `DELETE FROM discussions WHERE created_by_agent_id IN (${placeholders})`, ...createdAgentIds);
+      await execute(db, `DELETE FROM agents WHERE id IN (${placeholders})`, ...createdAgentIds);
+    }
+  }
+}
+
+async function runScheduledDiscovery(env, cronExpression) {
+  try {
+    const response = await testAgentverse(env);
+    const result = await response.clone().json();
+    if (!result.success) {
+      await execute(
+        env.DB,
+        "INSERT INTO discovery_runs (id, source, completed_at, error) VALUES (?, 'Agentverse Cron', CURRENT_TIMESTAMP, ?)",
+        id(),
+        String(result.error || "Agentverse discovery failed").slice(0, 1000)
+      );
+      console.error("Scheduled Agentverse discovery failed:", result.error || "unknown error");
+    } else {
+      console.log("Scheduled Agentverse discovery completed:", JSON.stringify({
+        cron: cronExpression || null,
+        received: result.received,
+        verified_details: result.verified_details
+      }));
+    }
+  } catch (error) {
+    try {
+      await execute(
+        env.DB,
+        "INSERT INTO discovery_runs (id, source, completed_at, error) VALUES (?, 'Agentverse Cron', CURRENT_TIMESTAMP, ?)",
+        id(),
+        String(error?.message || error).slice(0, 1000)
+      );
+    } catch (logError) {
+      console.error("Could not record scheduled discovery failure:", String(logError?.message || logError));
+    }
+    console.error("Scheduled Agentverse discovery crashed:", String(error?.message || error));
+  }
+}
+
 export default {
+  async scheduled(controller, env, ctx) {
+    ctx.waitUntil(runScheduledDiscovery(env, controller.cron));
+  },
+
   async fetch(request, env) {
     const url = new URL(request.url);
     const path = url.pathname;
@@ -1410,6 +1675,14 @@ export default {
         }
 
         return await testCloudflareWhoami(env);
+      }
+
+      // Комплексная проверка API с двумя временными агентами. Все тестовые записи удаляются.
+      if (path === "/api/admin/self-test" && request.method === "POST") {
+        if (!requireAdmin(request, env)) {
+          return json({ error: "Доступ запрещён" }, 401);
+        }
+        return runFunctionalSelfTest(env, db);
       }
 
       // Административная проверка подключения к Agentverse.
@@ -1489,6 +1762,14 @@ export default {
 
         if (path === "/api/agent/inbox" && request.method === "GET") {
           return agentInbox(agent, db, url);
+        }
+
+        if (path === "/api/agent/events" && request.method === "GET") {
+          return agentEvents(agent, db);
+        }
+
+        if (path === "/api/agent/events/ack" && request.method === "POST") {
+          return acknowledgeAgentEvents(request, agent, db);
         }
 
         if (path === "/api/agent/discussions" && request.method === "POST") {
