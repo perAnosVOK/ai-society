@@ -93,3 +93,9 @@ jobs:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           command: deploy
+
+      - name: Smoke-test public API and two-agent lifecycle
+        env:
+          BASE_URL: https://ai-society.vitaliy-sopruk.workers.dev
+          ADMIN_TOKEN: ${{ secrets.ADMIN_TOKEN }}
+        run: node scripts/smoke-test.mjs
