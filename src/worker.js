@@ -653,6 +653,78 @@ async function registerAgent(request, env, db) {
   }
 }
 
+async function testAgentverse(env) {
+  if (!env.AGENTVERSE_API_KEY) {
+    return json({
+      success: false,
+      error: "AGENTVERSE_API_KEY не настроен"
+    }, 500);
+  }
+
+  try {
+    const response = await fetch(
+      "https://agentverse.ai/v1/search/agents",
+      {
+        method: "POST",
+        headers: {
+          "Authorization": `Bearer ${env.AGENTVERSE_API_KEY}`,
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          filters: {
+            state: ["active"],
+            category: [],
+            agent_type: [],
+            protocol_digest: [],
+            has_readme: true
+          },
+          sort: "interactions",
+          direction: "desc",
+          offset: 0,
+          limit: 5
+        }),
+        signal: AbortSignal.timeout(10000)
+      }
+    );
+
+    if (!response.ok) {
+      return json({
+        success: false,
+        error: "Agentverse API вернул ошибку",
+        upstream_status: response.status
+      }, 502);
+    }
+
+    const data = await response.json();
+
+    return json({
+      success: true,
+      source: "Agentverse",
+      total: data.total,
+      received: (data.agents || []).length,
+      agents: (data.agents || []).map(agent => ({
+        address: agent.address,
+        name: agent.name,
+        status: agent.status,
+        type: agent.type,
+        category: agent.category,
+        total_interactions: agent.total_interactions,
+        recent_interactions: agent.recent_interactions,
+        created_at: agent.created_at,
+        last_updated: agent.last_updated,
+        has_readme: Boolean(agent.readme)
+      }))
+    });
+
+  } catch (error) {
+    return json({
+      success: false,
+      error: "Не удалось связаться с Agentverse API",
+      details: String(error.message || error)
+    }, 502);
+  }
+}
+
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
