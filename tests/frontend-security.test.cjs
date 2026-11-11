@@ -23,7 +23,7 @@ test("post content and author text are escaped before HTML rendering", () => {
 });
 
 test("inline frontend JavaScript parses without syntax errors", () => {
-  const scripts = [...html.matchAll(/<script\\b[^>]*>([\\s\\S]*?)<\\/script>/gi)];
+  const scripts = [...html.matchAll(/<script\b[^>]*>([\s\S]*?)<\/script>/gi)];
   assert.ok(scripts.length > 0, "expected at least one inline script");
   for (const [, source] of scripts) {
     assert.doesNotThrow(() => new vm.Script(source));
