@@ -124,6 +124,162 @@ function requireAdmin(request, env) {
   );
 }
 
+
+// Безопасная проверка подключения к официальному Cloudflare MCP.
+// Выполняет только initialize и tools/list; инструменты Cloudflare не запускаются.
+async function parseMcpResponse(response) {
+  const raw = await response.text();
+  if (!raw) return null;
+
+  const contentType = response.headers.get("content-type") || "";
+  if (contentType.includes("text/event-stream")) {
+    const messages = raw
+      .split(/\r?\n/)
+      .filter(line => line.startsWith("data:"))
+      .map(line => line.slice(5).trim())
+      .filter(Boolean)
+      .map(line => {
+        try { return JSON.parse(line); } catch { return null; }
+      })
+      .filter(Boolean);
+    return messages[messages.length - 1] || null;
+  }
+
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return { parse_error: true };
+  }
+}
+
+async function callCloudflareMcp(env, message, protocolVersion, sessionId = null) {
+  const headers = {
+    "Authorization": `Bearer ${env.CLOUDFLARE_API_TOKEN}`,
+    "Content-Type": "application/json",
+    "Accept": "application/json, text/event-stream"
+  };
+
+  if (protocolVersion) headers["MCP-Protocol-Version"] = protocolVersion;
+  if (sessionId) headers["Mcp-Session-Id"] = sessionId;
+
+  const response = await fetch("https://mcp.cloudflare.com/mcp", {
+    method: "POST",
+    headers,
+    body: JSON.stringify(message),
+    signal: AbortSignal.timeout(20000)
+  });
+
+  const payload = await parseMcpResponse(response);
+
+  if (!response.ok) {
+    return {
+      ok: false,
+      status: response.status,
+      payload
+    };
+  }
+
+  if (payload?.error) {
+    return {
+      ok: false,
+      status: response.status,
+      protocolError: payload.error
+    };
+  }
+
+  return {
+    ok: true,
+    status: response.status,
+    payload,
+    sessionId: response.headers.get("Mcp-Session-Id") || sessionId
+  };
+}
+
+async function testCloudflareMcp(env) {
+  const missing = [];
+  if (!env.CLOUDFLARE_API_TOKEN) missing.push("CLOUDFLARE_API_TOKEN");
+  if (!env.AI_MANAGER_TOKEN) missing.push("AI_MANAGER_TOKEN");
+
+  if (missing.length) {
+    return json({
+      success: false,
+      error: "Не настроены необходимые Worker Secrets",
+      missing
+    }, 500);
+  }
+
+  try {
+    const init = await callCloudflareMcp(env, {
+      jsonrpc: "2.0",
+      id: 1,
+      method: "initialize",
+      params: {
+        protocolVersion: "2025-11-25",
+        capabilities: {},
+        clientInfo: {
+          name: "ai-society-mcp-check",
+          version: "1.0.0"
+        }
+      }
+    });
+
+    if (!init.ok) {
+      return json({
+        success: false,
+        stage: "initialize",
+        upstream_status: init.status,
+        details: init.protocolError || init.payload || "Cloudflare MCP не принял запрос"
+      }, 502);
+    }
+
+    const negotiatedVersion =
+      init.payload?.result?.protocolVersion || "2025-11-25";
+
+    const listed = await callCloudflareMcp(env, {
+      jsonrpc: "2.0",
+      id: 2,
+      method: "tools/list",
+      params: {}
+    }, negotiatedVersion, init.sessionId);
+
+    if (!listed.ok) {
+      return json({
+        success: false,
+        stage: "tools/list",
+        upstream_status: listed.status,
+        details: listed.protocolError || listed.payload || "Не удалось получить список инструментов"
+      }, 502);
+    }
+
+    const tools = listed.payload?.result?.tools;
+    if (!Array.isArray(tools)) {
+      return json({
+        success: false,
+        stage: "tools/list",
+        error: "MCP ответил, но список инструментов отсутствует"
+      }, 502);
+    }
+
+    return json({
+      success: true,
+      server: "https://mcp.cloudflare.com/mcp",
+      protocol_version: negotiatedVersion,
+      server_info: init.payload?.result?.serverInfo || null,
+      tools_count: tools.length,
+      tools: tools.map(tool => tool.name).filter(Boolean),
+      note: "Выполнены только initialize и tools/list. Изменения в Cloudflare не производились."
+    });
+  } catch (error) {
+    return json({
+      success: false,
+      error: "Не удалось связаться с Cloudflare MCP",
+      details: String(error?.name || "NetworkError") === "TimeoutError"
+        ? "Истекло время ожидания ответа"
+        : String(error?.message || "Неизвестная ошибка").slice(0, 300)
+    }, 502);
+  }
+}
+
 // Публичная лента.
 async function feed(db, after = null) {
   if (after) {
@@ -906,6 +1062,16 @@ export default {
     }
 
     try {
+      // Проверка соединения с Cloudflare MCP (без выполнения API-инструментов).
+      if (path === "/api/admin/cloudflare-mcp-test" && request.method === "GET") {
+        if (!env.AI_MANAGER_TOKEN ||
+            request.headers.get("Authorization") !== `Bearer ${env.AI_MANAGER_TOKEN}`) {
+          return json({ error: "Доступ запрещён" }, 401);
+        }
+
+        return await testCloudflareMcp(env);
+      }
+
       // Административная проверка подключения к Agentverse.
       if (path === "/api/admin/test-agentverse" && request.method === "GET") {
         if (!requireAdmin(request, env)) {
