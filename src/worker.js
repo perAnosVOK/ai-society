@@ -280,6 +280,128 @@ async function testCloudflareMcp(env) {
   }
 }
 
+
+// Проверка личности Cloudflare-аккаунта через MCP whoami.
+// Выполняет только чтение сведений об авторизованном аккаунте.
+async function testCloudflareWhoami(env) {
+  if (!env.CLOUDFLARE_API_TOKEN) {
+    return json({
+      success: false,
+      error: "CLOUDFLARE_API_TOKEN не настроен"
+    }, 500);
+  }
+
+  try {
+    const init = await callCloudflareMcp(env, {
+      jsonrpc: "2.0",
+      id: 101,
+      method: "initialize",
+      params: {
+        protocolVersion: "2025-11-25",
+        capabilities: {},
+        clientInfo: {
+          name: "ai-society-mcp-whoami",
+          version: "1.0.0"
+        }
+      }
+    });
+
+    if (!init.ok) {
+      return json({
+        success: false,
+        stage: "initialize",
+        upstream_status: init.status,
+        details: init.protocolError || init.payload || "Cloudflare MCP не принял запрос"
+      }, 502);
+    }
+
+    const protocolVersion =
+      init.payload?.result?.protocolVersion || "2025-11-25";
+
+    const listed = await callCloudflareMcp(env, {
+      jsonrpc: "2.0",
+      id: 102,
+      method: "tools/list",
+      params: {}
+    }, protocolVersion, init.sessionId);
+
+    if (!listed.ok) {
+      return json({
+        success: false,
+        stage: "tools/list",
+        upstream_status: listed.status,
+        details: listed.protocolError || listed.payload || "Не удалось получить список инструментов"
+      }, 502);
+    }
+
+    const tools = listed.payload?.result?.tools;
+    if (!Array.isArray(tools) || !tools.some(tool => tool.name === "whoami")) {
+      return json({
+        success: false,
+        stage: "tools/list",
+        error: "Инструмент whoami отсутствует в списке Cloudflare MCP"
+      }, 502);
+    }
+
+    const called = await callCloudflareMcp(env, {
+      jsonrpc: "2.0",
+      id: 103,
+      method: "tools/call",
+      params: {
+        name: "whoami",
+        arguments: {}
+      }
+    }, protocolVersion, listed.sessionId || init.sessionId);
+
+    if (!called.ok) {
+      return json({
+        success: false,
+        stage: "tools/call",
+        upstream_status: called.status,
+        details: called.protocolError || called.payload || "Вызов whoami завершился ошибкой"
+      }, 502);
+    }
+
+    const result = called.payload?.result;
+    if (!result) {
+      return json({
+        success: false,
+        stage: "tools/call",
+        error: "Cloudflare MCP вернул пустой результат whoami"
+      }, 502);
+    }
+
+    const content = Array.isArray(result.content)
+      ? result.content.map(item => {
+          if (item?.type === "text") {
+            return {
+              type: "text",
+              text: String(item.text || "").slice(0, 4000)
+            };
+          }
+          return { type: String(item?.type || "unknown") };
+        })
+      : [];
+
+    return json({
+      success: !result.isError,
+      tool: "whoami",
+      account: result.structuredContent || null,
+      details: content,
+      note: "Выполнен только read-only вызов whoami. Изменения в Cloudflare не производились."
+    }, result.isError ? 502 : 200);
+
+  } catch (error) {
+    return json({
+      success: false,
+      error: "Не удалось выполнить Cloudflare MCP whoami",
+      details: String(error?.name || "NetworkError") === "TimeoutError"
+        ? "Истекло время ожидания ответа"
+        : String(error?.message || "Неизвестная ошибка").slice(0, 300)
+    }, 502);
+  }
+}
+
 // Публичная лента.
 async function feed(db, after = null) {
   if (after) {
@@ -1101,6 +1223,20 @@ export default {
         }
 
         return await testCloudflareMcp(env);
+      }
+
+      // Проверка Cloudflare-аккаунта через MCP whoami (только чтение).
+      if (path === "/api/admin/cloudflare-mcp-whoami" && request.method === "GET") {
+        const configuredToken = typeof env.AI_MANAGER_TOKEN === "string"
+          ? env.AI_MANAGER_TOKEN.trim()
+          : "";
+        const authorization = (request.headers.get("Authorization") || "").trim();
+
+        if (!configuredToken || authorization !== `Bearer ${configuredToken}`) {
+          return json({ error: "Доступ запрещён" }, 401);
+        }
+
+        return await testCloudflareWhoami(env);
       }
 
       // Административная проверка подключения к Agentverse.
