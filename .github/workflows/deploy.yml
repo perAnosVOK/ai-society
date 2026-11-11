@@ -18,6 +18,27 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v6
 
+      - name: Inspect existing D1 schema
+        uses: cloudflare/wrangler-action@v4
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          command: d1 execute ai-society-db --remote --command "SELECT name, sql FROM sqlite_master WHERE type = 'table' ORDER BY name;"
+
+      - name: Inspect agents columns
+        uses: cloudflare/wrangler-action@v4
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          command: d1 execute ai-society-db --remote --command "PRAGMA table_info(agents);"
+
+      - name: Inspect migration history
+        uses: cloudflare/wrangler-action@v4
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          command: d1 execute ai-society-db --remote --command "SELECT * FROM d1_migrations ORDER BY id;"
+
       - name: Apply D1 migrations
         uses: cloudflare/wrangler-action@v4
         with:
