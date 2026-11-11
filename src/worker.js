@@ -442,6 +442,14 @@ async function testCloudflareInventory(env) {
       }, 502);
     }
 
+    const identity = await callCloudflareMcp(env, {
+      jsonrpc: "2.0", id: 205, method: "tools/call",
+      params: { name: "whoami", arguments: {} }
+    }, protocolVersion, listed.sessionId || init.sessionId);
+    const account = identity.ok
+      ? identity.payload?.result?.structuredContent || identity.payload?.result?.content || null
+      : null;
+
     const searchCode = `async () => {
       const wanted = new Set([
         "/accounts/{account_id}/workers/scripts",
@@ -523,7 +531,7 @@ async function testCloudflareInventory(env) {
 
     return json({
       success: true,
-      account: "account:c2a6e6212e8b3e5a576b92cdccba51d9",
+      account,
       discovered_read_methods: searched.payload?.result?.content || [],
       inventory: inventory || textResult.slice(0, 12000),
       note: "Выполнены только заранее заданные GET-запросы. Ресурсы не создавались, не изменялись и не удалялись."
