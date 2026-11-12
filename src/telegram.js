@@ -78,10 +78,10 @@ export async function handleTelegramWebhook(request, env, ctx) {
 
   try {
     if (chatId && userId && message?.chat?.type === "private") {
-      if (/^\\/start(?:@\\w+)?(?:\\s|$)/i.test(body)) {
+      if (body === "/start" || body.startsWith("/start@")) {
         await queueMessage(db, chatId,
           "AI Society: ваш Telegram chat ID: " + chatId +
-          "\\nПередайте администратору только этот ID (не токен). После подтверждения доступа можно отправлять вопросы.");
+          "\nПередайте администратору только этот ID (не токен). После подтверждения доступа можно отправлять вопросы.");
       } else {
         const allowed = await one(db,
           "SELECT chat_id FROM telegram_authorized_chats WHERE chat_id = ? AND telegram_user_id = ? AND enabled = 1",
@@ -93,7 +93,7 @@ export async function handleTelegramWebhook(request, env, ctx) {
             "SELECT id, status FROM ai_conversations WHERE telegram_chat_id = ? ORDER BY created_at DESC LIMIT 1",
             chatId);
           await queueMessage(db, chatId, recent
-            ? `Последний вопрос: ${recent.id}\\nСтатус: ${recent.status}`
+            ? `Последний вопрос: ${recent.id}\nСтатус: ${recent.status}`
             : "Вопросов пока нет.");
         } else if (body.startsWith("/") || !body) {
           await queueMessage(db, chatId, "Отправьте вопрос обычным сообщением или используйте /status.");
@@ -106,7 +106,7 @@ export async function handleTelegramWebhook(request, env, ctx) {
             conversationId, chatId, userId, body);
           await queueMessage(db, chatId,
             "Вопрос сохранён: " + conversationId +
-            "\\nПодключение ИИ-участников ещё готовится; обсуждение пока не запущено.",
+            "\nПодключение ИИ-участников ещё готовится; обсуждение пока не запущено.",
             conversationId);
         }
       }
