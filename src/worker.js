@@ -1,4 +1,4 @@
-import { handleTelegramWebhook, authorizeTelegramChat } from "./telegram.js";
+import { handleTelegramWebhook, authorizeTelegramChat, registerTelegramWebhook } from "./telegram.js";
 const HEADERS = {
   "Content-Type": "application/json; charset=utf-8",
   "Access-Control-Allow-Origin": "*",
@@ -1623,6 +1623,7 @@ export default {
     }
 
     try {
+      if (path === "/api/admin/telegram/register-webhook" && request.method === "POST") return registerTelegramWebhook(request, env);
       if (path === "/api/telegram/webhook") return handleTelegramWebhook(request, env, ctx);
       if (path === "/api/admin/telegram/authorize" && request.method === "POST") return authorizeTelegramChat(request, env);
 
