@@ -6,7 +6,7 @@ const providers = [
   { key: "groq", name: "Groq", model: "openai/gpt-oss-20b", secret: "GROQ_API_KEY" }
 ];
 const instruction = "Ты независимый участник AI Society. Отвечай на языке пользователя кратко, конкретно и по существу: обычно 100–180 слов, максимум 3–5 коротких пунктов, если они действительно нужны. Сначала прямой ответ, затем только ключевые аргументы или шаги. Не добавляй длинные вступления, таблицы, повторения, общие предупреждения и предложения дальнейшей помощи без необходимости. Если пользователь явно просит подробности или код, дай достаточную для задачи полноту. Не утверждай, что другие модели согласились с тобой.";
-async function discoverGeminiModel(env) {
+async function discoverGeminiModels(env) {
   const response = await fetch("https://generativelanguage.googleapis.com/v1beta/models?pageSize=100", {
     headers: { "x-goog-api-key": env.GEMINI_API_KEY },
     signal: AbortSignal.timeout(15000)
@@ -16,30 +16,36 @@ async function discoverGeminiModel(env) {
   const supported = (data.models || []).filter(m =>
     m.supportedGenerationMethods?.includes("generateContent") &&
     /gemini.*flash/.test(m.name || "") &&
-    !/image|tts|live|preview/.test(m.name || "")
-  );
-  const chosen = supported.find(m => /gemini-2\\.5-flash$/.test(m.name))
-    || supported.find(m => /gemini-2\\.0-flash$/.test(m.name))
-    || supported[0];
-  if (!chosen) throw new Error("No Gemini Flash generateContent model available for this API key");
-  return chosen.name.replace("models/", "");
+    !/image|tts|live|preview|image-generation/.test(m.name || "")
+  ).map(m => m.name.replace(/^models\\//, ""));
+  if (!supported.length) throw new Error("No Gemini Flash generateContent model available for this API key");
+  return supported.sort((a, b) => {
+    const priority = name => /gemini-3[.]1-flash$/.test(name) ? 0
+      : /gemini-3-flash$/.test(name) ? 1
+      : /gemini-2[.]0-flash$/.test(name) ? 2
+      : /gemini-2[.]5-flash$/.test(name) ? 9 : 3;
+    return priority(a) - priority(b);
+  });
 }
 async function generate(env, provider, question) {
   if (!env[provider.secret]) throw new Error("API key not configured");
   let response;
   if (provider.key === "gemini") {
-    const model = await discoverGeminiModel(env);
-    provider = { ...provider, model };
-    response = await fetch("https://generativelanguage.googleapis.com/v1beta/models/" + model + ":generateContent", {
-      method: "POST",
-      headers: { "x-goog-api-key": env.GEMINI_API_KEY, "Content-Type": "application/json" },
-      body: JSON.stringify({
-        systemInstruction: { parts: [{ text: instruction }] },
-        contents: [{ role: "user", parts: [{ text: question }] }],
-        generationConfig: { maxOutputTokens: 1200 }
-      }),
-      signal: AbortSignal.timeout(45000)
-    });
+    const models = await discoverGeminiModels(env);
+    for (const model of models.slice(0, 6)) {
+      provider = { ...provider, model };
+      response = await fetch("https://generativelanguage.googleapis.com/v1beta/models/" + model + ":generateContent", {
+        method: "POST",
+        headers: { "x-goog-api-key": env.GEMINI_API_KEY, "Content-Type": "application/json" },
+        body: JSON.stringify({
+          systemInstruction: { parts: [{ text: instruction }] },
+          contents: [{ role: "user", parts: [{ text: question }] }],
+          generationConfig: { maxOutputTokens: 1200 }
+        }),
+        signal: AbortSignal.timeout(45000)
+      });
+      if (response.status !== 404) break;
+    }
   } else {
     response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
       method: "POST",
