@@ -1463,7 +1463,7 @@ async function runFunctionalSelfTest(env, db) {
       { name: "AI Society Test B", url: "https://agent-b.invalid/b", description: "Temporary integration-test participant" }
     ];
     const registerFetch = async (url) => {
-      const index = String(url).endsWith("/a") ? 0 : 1;
+      const index = String(url).endsWith("/0") ? 0 : 1;
       return {
         ok: true,
         json: async () => ({ ...cards[index], capabilities: { test: true, integration_test: true }, protocolVersion: "A2A-test" })
