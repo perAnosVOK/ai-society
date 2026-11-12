@@ -130,11 +130,42 @@ export async function authorizeTelegramChat(request, env) {
   try { data = await request.json(); } catch { return reply({ error: "Invalid JSON" }, 400); }
   const chatId = String(data?.chat_id || "");
   const userId = String(data?.telegram_user_id || "");
-  if (!/^-?\\d{1,20}$/.test(chatId) || !/^\\d{1,20}$/.test(userId) || chatId !== userId) {
+  if (!/^-?\d{1,20}$/.test(chatId) || !/^\d{1,20}$/.test(userId) || chatId !== userId) {
     return reply({ error: "For private chats, chat_id must equal telegram_user_id" }, 400);
   }
   await run(env.DB,
     "INSERT INTO telegram_authorized_chats (chat_id, telegram_user_id, enabled) VALUES (?, ?, 1) ON CONFLICT(chat_id) DO UPDATE SET telegram_user_id = excluded.telegram_user_id, enabled = 1",
     chatId, userId);
   return reply({ ok: true, chat_id: chatId });
+}
+
+export async function registerTelegramWebhook(request, env) {
+  if (!env.ADMIN_TOKEN || request.headers.get("Authorization") !== `Bearer ${env.ADMIN_TOKEN}`) {
+    return reply({ error: "Unauthorized" }, 401);
+  }
+  if (!env.TELEGRAM_BOT_TOKEN || !env.TELEGRAM_WEBHOOK_SECRET || env.TELEGRAM_WEBHOOK_SECRET.length < 16) {
+    return reply({ error: "Telegram secrets are not configured" }, 503);
+  }
+  const webhookUrl = "https://ai-society.vitaliy-sopruk.workers.dev/api/telegram/webhook";
+  try {
+    const response = await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/setWebhook`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        url: webhookUrl,
+        secret_token: env.TELEGRAM_WEBHOOK_SECRET,
+        allowed_updates: ["message"],
+        drop_pending_updates: false
+      }),
+      signal: AbortSignal.timeout(15000)
+    });
+    const data = await response.json();
+    if (!response.ok || !data.ok) {
+      return reply({ ok: false, error: "Telegram rejected webhook registration", telegram_error_code: data.error_code || response.status }, 502);
+    }
+    return reply({ ok: true, webhook_url: webhookUrl });
+  } catch (error) {
+    console.error("Telegram webhook registration failed", error?.name || "Error");
+    return reply({ ok: false, error: "Telegram webhook registration request failed" }, 502);
+  }
 }
