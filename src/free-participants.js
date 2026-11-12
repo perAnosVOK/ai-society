@@ -79,6 +79,11 @@ async function generate(env, provider, question) {
     : data.choices?.[0]?.finish_reason === "length";
   return { text, model: provider.model, truncated };
 }
+// Provider refusals are not substantive contributions to the council.
+export function isRefusal(text) {
+  const value = String(text || "").trim().toLowerCase().replace(/[’‘]/g, "'");
+  return /^(?:i(?:'m| am) sorry,? but i (?:can't|cannot) (?:help|assist)|i (?:can't|cannot) (?:help|assist) with (?:that|this)|sorry,? i (?:can't|cannot) (?:help|assist)|извините,? (?:но )?я не могу (?:помочь|с этим помочь)|я не могу помочь с этим|вибачте,? (?:але )?я не можу (?:допомогти|з цим допомогти)|я не можу допомогти з цим)/.test(value);
+}
 async function notify(db, conversation, message) {
   for (const chunk of message.match(/[\s\S]{1,3500}/g) || []) {
     await run(db, "INSERT INTO telegram_outbox (id, conversation_id, chat_id, message_text) VALUES (?, ?, ?, ?)",
@@ -102,6 +107,7 @@ export async function answerWithGeminiGroq(env, conversationId) {
       participantId, conversationId, provider.key, provider.name, provider.model);
     try {
       const result = await generate(env, provider, conversation.question);
+      if (isRefusal(result.text)) throw new Error("Provider declined to answer");
       const answer = result.text + (result.truncated ? "\\n\\n[Ответ достиг лимита токенов и может быть неполным.]" : "");
       await run(db,
         "INSERT INTO ai_discussion_messages (id, conversation_id, participant_id, provider_key, message_type, content) VALUES (?, ?, ?, ?, 'initial_answer', ?)",
@@ -110,18 +116,25 @@ export async function answerWithGeminiGroq(env, conversationId) {
       await run(db,
         "UPDATE ai_conversation_participants SET participation_status = 'responded', updated_at = CURRENT_TIMESTAMP WHERE id = ?",
         participantId);
-      await notify(db, conversation, provider.name + " (" + result.model + ") — независимый ответ:\n\n" + answer);
-      return { name: provider.name, answer };
+      return { name: provider.name, answer, model: result.model };
     } catch (error) {
       const reason = String(error?.message || "provider unavailable").slice(0,180);
       console.error(provider.key + " failed:", reason);
       await run(db,
         "UPDATE ai_conversation_participants SET participation_status = 'unavailable', updated_at = CURRENT_TIMESTAMP WHERE id = ?",
         participantId);
-      await notify(db, conversation, provider.name + ": ответ пока недоступен (" + reason + ").");
       return { name: provider.name, error: reason };
     }
   }));
+  // Enqueue provider results in a deterministic order before the completion notice.
+  // This prevents the final message from overtaking a slower provider response.
+  for (const outcome of outcomes) {
+    if (outcome.answer) {
+      await notify(db, conversation, outcome.name + " (" + outcome.model + ") — независимый ответ:\\n\\n" + outcome.answer);
+    } else {
+      await notify(db, conversation, outcome.name + ": ответ пока недоступен (" + outcome.error + ").");
+    }
+  }
   const successful = outcomes.filter(x => x.answer);
   const summary = successful.map(x => x.name + ":\n" + x.answer).join("\n\n");
   await run(db,
