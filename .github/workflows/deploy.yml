@@ -84,6 +84,19 @@ jobs:
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           command: d1 migrations apply ai-society-db --remote
 
+      - name: Sync admin token to Worker
+        env:
+          ADMIN_TOKEN: ${{ secrets.ADMIN_TOKEN }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          if [ -n "${ADMIN_TOKEN:-}" ]; then
+            printf '%s' "$ADMIN_TOKEN" | npx wrangler secret put ADMIN_TOKEN
+            echo "Worker ADMIN_TOKEN synchronized."
+          else
+            echo "ADMIN_TOKEN is not configured in GitHub Actions; lifecycle self-test will be skipped."
+          fi
+
       - name: Deploy Worker
         uses: cloudflare/wrangler-action@v4
         env:
