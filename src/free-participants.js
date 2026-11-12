@@ -17,7 +17,7 @@ async function discoverGeminiModels(env) {
     m.supportedGenerationMethods?.includes("generateContent") &&
     /gemini.*flash/.test(m.name || "") &&
     !/image|tts|live|preview|image-generation/.test(m.name || "")
-  ).map(m => m.name.replace(/^models\\//, ""));
+  ).map(m => m.name.startsWith("models/") ? m.name.slice(7) : m.name);
   if (!supported.length) throw new Error("No Gemini Flash generateContent model available for this API key");
   return supported.sort((a, b) => {
     const priority = name => /gemini-3[.]1-flash$/.test(name) ? 0
