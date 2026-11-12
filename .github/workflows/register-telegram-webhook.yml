@@ -1,0 +1,31 @@
+name: Register Telegram Webhook
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  register:
+    name: Register Telegram webhook
+    runs-on: ubuntu-latest
+    steps:
+      - name: Register webhook using Worker-held Telegram secrets
+        env:
+          ADMIN_TOKEN: ${{ secrets.ADMIN_TOKEN }}
+        run: |
+          if [ -z "${ADMIN_TOKEN:-}" ]; then
+            echo "::error::GitHub ADMIN_TOKEN secret is missing"
+            exit 1
+          fi
+          status=$(curl --silent --show-error --output response.json --write-out '%{http_code}' \
+            --max-time 25 --request POST \
+            --header "Authorization: Bearer ${ADMIN_TOKEN}" \
+            "https://ai-society.vitaliy-sopruk.workers.dev/api/admin/telegram/register-webhook")
+          if [ "$status" != "200" ]; then
+            echo "::error::Webhook registration returned HTTP $status"
+            node -e 'const r=require("./response.json"); console.log(JSON.stringify({error:r.error,telegram_error_code:r.telegram_error_code}))'
+            exit 1
+          fi
+          node -e 'const r=require("./response.json"); if(!r.ok) process.exit(1); console.log("Telegram webhook registered:",r.webhook_url)'
