@@ -1,4 +1,4 @@
-import { answerWithOpenAI } from "./openai-participant.js";
+import { answerWithGeminiGroq } from "./free-participants.js";
 // Telegram transport for the AI council. No provider calls are made here.
 const reply = (body, status = 200) => new Response(JSON.stringify(body), {
   status, headers: { "Content-Type": "application/json; charset=utf-8" }
@@ -107,7 +107,7 @@ export async function handleTelegramWebhook(request, env, ctx) {
             "INSERT INTO ai_conversations (id, telegram_chat_id, telegram_user_id, question) VALUES (?, ?, ?, ?)",
             conversationId, chatId, userId, body);
           await queueMessage(db, chatId,
-            "Вопрос сохранён: " + conversationId + "\nЗапрашиваю первый независимый ответ ChatGPT.",
+            "Вопрос сохранён: " + conversationId + "\nЗапрашиваю независимые ответы Gemini и Groq.",
             conversationId);
           newConversationId = conversationId;
         }
@@ -121,7 +121,7 @@ export async function handleTelegramWebhook(request, env, ctx) {
     return reply({ error: "Processing failed" }, 503);
   }
   ctx?.waitUntil?.(flushTelegramOutbox(env));
-  if (newConversationId) ctx?.waitUntil?.(answerWithOpenAI(env, newConversationId).then(() => flushTelegramOutbox(env)));
+  if (newConversationId) ctx?.waitUntil?.(answerWithGeminiGroq(env, newConversationId).then(() => flushTelegramOutbox(env)));
   return reply({ ok: true });
 }
 
