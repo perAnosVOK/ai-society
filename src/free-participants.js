@@ -5,7 +5,7 @@ const providers = [
   { key: "gemini", name: "Google Gemini", model: "gemini-2.5-flash", secret: "GEMINI_API_KEY" },
   { key: "groq", name: "Groq", model: "openai/gpt-oss-20b", secret: "GROQ_API_KEY" }
 ];
-const instruction = "Ты независимый участник AI Society. Ответь на языке пользователя ясно и по существу. Не утверждай, что другие модели согласились с тобой.";
+const instruction = "Ты независимый участник AI Society. Отвечай на языке пользователя кратко, конкретно и по существу: обычно 100–180 слов, максимум 3–5 коротких пунктов, если они действительно нужны. Сначала прямой ответ, затем только ключевые аргументы или шаги. Не добавляй длинные вступления, таблицы, повторения, общие предупреждения и предложения дальнейшей помощи без необходимости. Если пользователь явно просит подробности или код, дай достаточную для задачи полноту. Не утверждай, что другие модели согласились с тобой.";
 async function discoverGeminiModel(env) {
   const response = await fetch("https://generativelanguage.googleapis.com/v1beta/models?pageSize=100", {
     headers: { "x-goog-api-key": env.GEMINI_API_KEY },
@@ -36,7 +36,7 @@ async function generate(env, provider, question) {
       body: JSON.stringify({
         systemInstruction: { parts: [{ text: instruction }] },
         contents: [{ role: "user", parts: [{ text: question }] }],
-        generationConfig: { maxOutputTokens: 2048 }
+        generationConfig: { maxOutputTokens: 1200 }
       }),
       signal: AbortSignal.timeout(45000)
     });
@@ -47,7 +47,7 @@ async function generate(env, provider, question) {
       body: JSON.stringify({
         model: provider.model,
         messages: [{ role: "system", content: instruction }, { role: "user", content: question }],
-        max_completion_tokens: 2048
+        max_completion_tokens: 1200
       }),
       signal: AbortSignal.timeout(45000)
     });
