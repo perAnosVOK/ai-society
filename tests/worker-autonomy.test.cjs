@@ -8,7 +8,9 @@ const migration = readFileSync(join(__dirname, "..", "migrations", "0006_agent_w
 const workflow = readFileSync(join(__dirname, "..", ".github", "workflows", "deploy.yml"), "utf8");
 
 test("six-hour Cron is handled by a real scheduled event", () => {
-  assert.match(readFileSync(join(__dirname, "..", "wrangler.toml"), "utf8"), /crons\s*=\s*\["0 \*\/6 \* \* \*"\]/);
+  const config = readFileSync(join(__dirname, "..", "wrangler.toml"), "utf8");
+  assert.match(config, /"0 \*\/6 \* \* \*"/);
+  assert.match(config, /"\*\/5 \* \* \* \*"/);
   assert.match(worker, /async scheduled\(controller, env, ctx\)/);
   assert.match(worker, /ctx\.waitUntil\(runScheduledDiscovery\(env, controller\.cron\)\)/);
   assert.match(worker, /testAgentverse\(env\)/);
