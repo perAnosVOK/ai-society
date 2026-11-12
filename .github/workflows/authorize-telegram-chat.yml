@@ -1,0 +1,44 @@
+name: Authorize Telegram Chat
+
+on:
+  workflow_dispatch:
+    inputs:
+      chat_id:
+        description: "Private Telegram chat ID from /start"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  authorize:
+    name: Authorize private Telegram chat
+    runs-on: ubuntu-latest
+    steps:
+      - name: Authorize chat via protected Worker endpoint
+        env:
+          ADMIN_TOKEN: ${{ secrets.ADMIN_TOKEN }}
+          CHAT_ID: ${{ inputs.chat_id }}
+        run: |
+          if [ -z "${ADMIN_TOKEN:-}" ]; then
+            echo "::error::ADMIN_TOKEN secret is missing"
+            exit 1
+          fi
+          if ! [[ "$CHAT_ID" =~ ^[0-9]{1,20}$ ]]; then
+            echo "::error::Invalid private Telegram chat ID"
+            exit 1
+          fi
+          payload=$(printf '{"chat_id":"%s","telegram_user_id":"%s"}' "$CHAT_ID" "$CHAT_ID")
+          status=$(curl --silent --show-error --output response.json --write-out '%{http_code}' \
+            --max-time 25 --request POST \
+            --header "Authorization: Bearer ${ADMIN_TOKEN}" \
+            --header "Content-Type: application/json" \
+            --data "$payload" \
+            "https://ai-society.vitaliy-sopruk.workers.dev/api/admin/telegram/authorize")
+          if [ "$status" != "200" ]; then
+            echo "::error::Authorization failed (HTTP $status)"
+            node -e 'const r=require("./response.json");console.log(JSON.stringify({error:r.error}))'
+            exit 1
+          fi
+          node -e 'const r=require("./response.json");if(!r.ok)process.exit(1);console.log("Telegram chat authorized:",r.chat_id)'
