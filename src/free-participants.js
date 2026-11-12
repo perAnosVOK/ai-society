@@ -22,7 +22,7 @@ async function discoverGeminiModel(env) {
     || supported.find(m => /gemini-2\\.0-flash$/.test(m.name))
     || supported[0];
   if (!chosen) throw new Error("No Gemini Flash generateContent model available for this API key");
-  return chosen.name.replace(/^models\\//, "");
+  return chosen.name.replace("models/", "");
 }
 async function generate(env, provider, question) {
   if (!env[provider.secret]) throw new Error("API key not configured");
