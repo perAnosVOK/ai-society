@@ -107,9 +107,9 @@ export async function handleTelegramWebhook(request, env, ctx) {
             "INSERT INTO ai_conversations (id, telegram_chat_id, telegram_user_id, question) VALUES (?, ?, ?, ?)",
             conversationId, chatId, userId, body);
           await queueMessage(db, chatId,
-            "Вопрос сохранён: " + conversationId +
-            "\nПодключение ИИ-участников ещё готовится; обсуждение пока не запущено.",
+            "Вопрос сохранён: " + conversationId + "\nЗапрашиваю первый независимый ответ ChatGPT.",
             conversationId);
+          newConversationId = conversationId;
         }
       }
     }
