@@ -6,17 +6,37 @@ const providers = [
   { key: "groq", name: "Groq", model: "openai/gpt-oss-20b", secret: "GROQ_API_KEY" }
 ];
 const instruction = "Ты независимый участник AI Society. Ответь на языке пользователя ясно и по существу. Не утверждай, что другие модели согласились с тобой.";
+async function discoverGeminiModel(env) {
+  const response = await fetch("https://generativelanguage.googleapis.com/v1beta/models?pageSize=100", {
+    headers: { "x-goog-api-key": env.GEMINI_API_KEY },
+    signal: AbortSignal.timeout(15000)
+  });
+  if (!response.ok) throw new Error("Gemini model listing HTTP " + response.status);
+  const data = await response.json();
+  const supported = (data.models || []).filter(m =>
+    m.supportedGenerationMethods?.includes("generateContent") &&
+    /gemini.*flash/.test(m.name || "") &&
+    !/image|tts|live|preview/.test(m.name || "")
+  );
+  const chosen = supported.find(m => /gemini-2\\.5-flash$/.test(m.name))
+    || supported.find(m => /gemini-2\\.0-flash$/.test(m.name))
+    || supported[0];
+  if (!chosen) throw new Error("No Gemini Flash generateContent model available for this API key");
+  return chosen.name.replace(/^models\\//, "");
+}
 async function generate(env, provider, question) {
   if (!env[provider.secret]) throw new Error("API key not configured");
   let response;
   if (provider.key === "gemini") {
-    response = await fetch("https://generativelanguage.googleapis.com/v1beta/models/" + provider.model + ":generateContent", {
+    const model = await discoverGeminiModel(env);
+    provider = { ...provider, model };
+    response = await fetch("https://generativelanguage.googleapis.com/v1beta/models/" + model + ":generateContent", {
       method: "POST",
       headers: { "x-goog-api-key": env.GEMINI_API_KEY, "Content-Type": "application/json" },
       body: JSON.stringify({
         systemInstruction: { parts: [{ text: instruction }] },
         contents: [{ role: "user", parts: [{ text: question }] }],
-        generationConfig: { maxOutputTokens: 1024 }
+        generationConfig: { maxOutputTokens: 2048 }
       }),
       signal: AbortSignal.timeout(45000)
     });
@@ -27,7 +47,7 @@ async function generate(env, provider, question) {
       body: JSON.stringify({
         model: provider.model,
         messages: [{ role: "system", content: instruction }, { role: "user", content: question }],
-        max_completion_tokens: 1024
+        max_completion_tokens: 2048
       }),
       signal: AbortSignal.timeout(45000)
     });
@@ -38,7 +58,10 @@ async function generate(env, provider, question) {
     ? (data.candidates?.[0]?.content?.parts || []).map(p => p.text || "").join("\n").trim()
     : (data.choices?.[0]?.message?.content || "").trim();
   if (!text) throw new Error("No text returned");
-  return text;
+  const truncated = provider.key === "gemini"
+    ? data.candidates?.[0]?.finishReason === "MAX_TOKENS"
+    : data.choices?.[0]?.finish_reason === "length";
+  return { text, model: provider.model, truncated };
 }
 async function notify(db, conversation, message) {
   for (const chunk of message.match(/[\s\S]{1,3500}/g) || []) {
@@ -62,14 +85,16 @@ export async function answerWithGeminiGroq(env, conversationId) {
       "INSERT INTO ai_conversation_participants (id, conversation_id, provider_key, display_name, model_id) VALUES (?, ?, ?, ?, ?)",
       participantId, conversationId, provider.key, provider.name, provider.model);
     try {
-      const answer = await generate(env, provider, conversation.question);
+      const result = await generate(env, provider, conversation.question);
+      const answer = result.text + (result.truncated ? "\\n\\n[Ответ достиг лимита токенов и может быть неполным.]" : "");
       await run(db,
         "INSERT INTO ai_discussion_messages (id, conversation_id, participant_id, provider_key, message_type, content) VALUES (?, ?, ?, ?, 'initial_answer', ?)",
         crypto.randomUUID(), conversationId, participantId, provider.key, answer);
+      await run(db, "UPDATE ai_conversation_participants SET model_id = ? WHERE id = ?", result.model, participantId);
       await run(db,
         "UPDATE ai_conversation_participants SET participation_status = 'responded', updated_at = CURRENT_TIMESTAMP WHERE id = ?",
         participantId);
-      await notify(db, conversation, provider.name + " (" + provider.model + ") — независимый ответ:\n\n" + answer);
+      await notify(db, conversation, provider.name + " (" + result.model + ") — независимый ответ:\n\n" + answer);
       return { name: provider.name, answer };
     } catch (error) {
       const reason = String(error?.message || "provider unavailable").slice(0,120);
