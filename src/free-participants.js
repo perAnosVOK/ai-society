@@ -9,7 +9,7 @@ const instruction = "Ты независимый участник AI Society. О
 async function discoverGeminiModels(env) {
   const response = await fetch("https://generativelanguage.googleapis.com/v1beta/models?pageSize=100", {
     headers: { "x-goog-api-key": env.GEMINI_API_KEY },
-    signal: AbortSignal.timeout(15000)
+    signal: AbortSignal.timeout(8000)
   });
   if (!response.ok) throw new Error("Gemini model listing HTTP " + response.status);
   const data = await response.json();
@@ -32,7 +32,7 @@ async function generate(env, provider, question) {
   let response;
   if (provider.key === "gemini") {
     const models = await discoverGeminiModels(env);
-    for (const model of models.slice(0, 6)) {
+    for (const model of models.slice(0, 2)) {
       provider = { ...provider, model };
       response = await fetch("https://generativelanguage.googleapis.com/v1beta/models/" + model + ":generateContent", {
         method: "POST",
@@ -42,7 +42,7 @@ async function generate(env, provider, question) {
           contents: [{ role: "user", parts: [{ text: question }] }],
           generationConfig: { maxOutputTokens: 1200 }
         }),
-        signal: AbortSignal.timeout(45000)
+        signal: AbortSignal.timeout(12000)
       });
       if (response.status !== 404) break;
     }
