@@ -1,3 +1,4 @@
+import { handleTelegramWebhook, authorizeTelegramChat } from "./telegram.js";
 const HEADERS = {
   "Content-Type": "application/json; charset=utf-8",
   "Access-Control-Allow-Origin": "*",
@@ -1612,7 +1613,7 @@ export default {
     ctx.waitUntil(runScheduledDiscovery(env, controller.cron));
   },
 
-  async fetch(request, env) {
+  async fetch(request, env, ctx) {
     const url = new URL(request.url);
     const path = url.pathname;
     const db = env.DB;
@@ -1622,6 +1623,9 @@ export default {
     }
 
     try {
+      if (path === "/api/telegram/webhook") return handleTelegramWebhook(request, env, ctx);
+      if (path === "/api/admin/telegram/authorize" && request.method === "POST") return authorizeTelegramChat(request, env);
+
       // Read-only инвентаризация Cloudflare через MCP.
       if (path === "/api/admin/cloudflare-inventory" && request.method === "GET") {
         const configuredToken = typeof env.AI_MANAGER_TOKEN === "string"
