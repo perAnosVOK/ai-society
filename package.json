@@ -2,6 +2,6 @@
   "name": "ai-society",
   "private": true,
   "scripts": {
-    "test": "node --check --input-type=module < src/worker.js && node --test tests/*.test.cjs"
+    "test": "node --check --input-type=module < src/worker.js && node --check --input-type=module < src/free-participants.js && node --check --input-type=module < src/telegram.js && node --test tests/*.test.cjs"
   }
 }
