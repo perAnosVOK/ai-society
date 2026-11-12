@@ -44,7 +44,7 @@ async function generate(env, provider, question) {
         }),
         signal: AbortSignal.timeout(12000)
       });
-      if (response.status !== 404) break;
+      if (![404, 429, 503].includes(response.status)) break;
     }
   } else {
     response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
@@ -113,7 +113,7 @@ export async function answerWithGeminiGroq(env, conversationId) {
       await notify(db, conversation, provider.name + " (" + result.model + ") — независимый ответ:\n\n" + answer);
       return { name: provider.name, answer };
     } catch (error) {
-      const reason = String(error?.message || "provider unavailable").slice(0,120);
+      const reason = String(error?.message || "provider unavailable").slice(0,180);
       console.error(provider.key + " failed:", reason);
       await run(db,
         "UPDATE ai_conversation_participants SET participation_status = 'unavailable', updated_at = CURRENT_TIMESTAMP WHERE id = ?",
@@ -130,4 +130,41 @@ export async function answerWithGeminiGroq(env, conversationId) {
     successful.length ? null : outcomes.map(x => x.name + ": " + x.error).join("; ").slice(0,400),
     conversationId);
   await notify(db, conversation, "Первый раунд завершён: ответили " + successful.length + " из 2 моделей. Совместное обсуждение и консенсус пока не реализованы.");
+}
+
+export async function recoverStalledConversations(env) {
+  const db = env.DB;
+  // Reclaim queued questions if a webhook's background task was interrupted.
+  const queued = await db.prepare(
+    "SELECT id FROM ai_conversations WHERE status = 'queued' AND created_at < datetime('now', '-2 minutes') LIMIT 5"
+  ).all();
+  for (const item of queued.results || []) {
+    try { await answerWithGeminiGroq(env, item.id); }
+    catch (error) { console.error("Queued conversation recovery failed:", item.id, String(error?.message || error)); }
+  }
+  // A stalled collecting_initial task may have already sent some answers.
+  // Finalize it using persisted messages; never duplicate provider calls or responses.
+  const stalled = await db.prepare(
+    "SELECT id, telegram_chat_id FROM ai_conversations WHERE status = 'collecting_initial' AND updated_at < datetime('now', '-3 minutes') LIMIT 10"
+  ).all();
+  for (const conversation of stalled.results || []) {
+    try {
+      const messages = await db.prepare(
+        "SELECT provider_key, content FROM ai_discussion_messages WHERE conversation_id = ? AND message_type = 'initial_answer' ORDER BY rowid"
+      ).bind(conversation.id).all();
+      const answers = messages.results || [];
+      const summary = answers.map(x => x.provider_key + ":\\n" + x.content).join("\\n\\n");
+      const claim = await run(db,
+        "UPDATE ai_conversations SET status = ?, consensus_status = 'not_reached', final_answer = ?, failure_reason = ?, completed_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND status = 'collecting_initial' AND updated_at < datetime('now', '-3 minutes')",
+        answers.length ? "completed" : "failed", summary || null,
+        answers.length ? null : "Background processing interrupted", conversation.id);
+      if (!claim.meta?.changes) continue;
+      await run(db,
+        "UPDATE ai_conversation_participants SET participation_status = 'unavailable', updated_at = CURRENT_TIMESTAMP WHERE conversation_id = ? AND participation_status NOT IN ('responded', 'unavailable')",
+        conversation.id);
+      await notify(db, conversation, "Обработка прервалась. Сохранено ответов: " + answers.length + " из 2. Незавершённый раунд закрыт автоматически.");
+    } catch (error) {
+      console.error("Stalled conversation recovery failed:", conversation.id, String(error?.message || error));
+    }
+  }
 }
