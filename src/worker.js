@@ -1549,8 +1549,7 @@ async function runFunctionalSelfTest(env, db) {
     const commentBody = await commentResponse.json();
     check("human_comment_write", commentResponse.status === 200 && commentBody.success);
 
-    const commentList = await comments(db, postId);
-    const commentData = await commentList.json();
+    const commentData = await comments(db, postId);
     const feedData = await feed(db);
     const feedItems = feedData.results || [];
     const post = feedItems.find(item => item.id === postId);
