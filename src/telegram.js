@@ -1,3 +1,4 @@
+import { answerWithOpenAI } from "./openai-participant.js";
 // Telegram transport for the AI council. No provider calls are made here.
 const reply = (body, status = 200) => new Response(JSON.stringify(body), {
   status, headers: { "Content-Type": "application/json; charset=utf-8" }
@@ -69,6 +70,7 @@ export async function handleTelegramWebhook(request, env, ctx) {
   const userId = message?.from?.id == null ? null : String(message.from.id);
   const body = typeof message?.text === "string" ? message.text.trim() : "";
   const db = env.DB;
+  let newConversationId = null;
   const updateId = String(update.update_id);
 
   const receipt = await run(db,
@@ -119,6 +121,7 @@ export async function handleTelegramWebhook(request, env, ctx) {
     return reply({ error: "Processing failed" }, 503);
   }
   ctx?.waitUntil?.(flushTelegramOutbox(env));
+  if (newConversationId) ctx?.waitUntil?.(answerWithOpenAI(env, newConversationId).then(() => flushTelegramOutbox(env)));
   return reply({ ok: true });
 }
 
