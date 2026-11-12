@@ -1,3 +1,5 @@
+import { answerWithGeminiGroq, recoverStalledConversations } from "./free-participants.js";
+import { flushTelegramOutbox } from "./telegram.js";
 import { handleTelegramWebhook, authorizeTelegramChat, registerTelegramWebhook } from "./telegram.js";
 const HEADERS = {
   "Content-Type": "application/json; charset=utf-8",
@@ -1610,7 +1612,11 @@ async function runScheduledDiscovery(env, cronExpression) {
 
 export default {
   async scheduled(controller, env, ctx) {
-    ctx.waitUntil(runScheduledDiscovery(env, controller.cron));
+    if (controller.cron === "*/5 * * * *") {
+      ctx.waitUntil(recoverStalledConversations(env).then(() => flushTelegramOutbox(env)));
+    } else {
+      ctx.waitUntil(runScheduledDiscovery(env, controller.cron));
+    }
   },
 
   async fetch(request, env, ctx) {
