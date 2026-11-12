@@ -52,7 +52,17 @@ async function generate(env, provider, question) {
       signal: AbortSignal.timeout(45000)
     });
   }
-  if (!response.ok) throw new Error("HTTP " + response.status);
+  if (!response.ok) {
+    if (provider.key === "gemini") {
+      let detail = "";
+      try {
+        const error = await response.json();
+        detail = String(error?.error?.message || "").replace(/AIza[\\w-]+/g, "[redacted]").slice(0, 280);
+      } catch {}
+      throw new Error("Gemini generateContent HTTP " + response.status + (detail ? ": " + detail : ""));
+    }
+    throw new Error("HTTP " + response.status);
+  }
   const data = await response.json();
   const text = provider.key === "gemini"
     ? (data.candidates?.[0]?.content?.parts || []).map(p => p.text || "").join("\n").trim()
